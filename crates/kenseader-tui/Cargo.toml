@@ -1,0 +1,19 @@
+[package]
+name = "kenseader-tui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Terminal UI library for Kenseader RSS reader"
+
+[dependencies]
+kenseader-core = { path = "../kenseader-core" }
+tokio.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+ratatui-image.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+open.workspace = true
+uuid.workspace = true

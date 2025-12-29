@@ -1,0 +1,23 @@
+[package]
+name = "kenseader"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "A high-performance terminal RSS reader with AI summarization"
+
+[[bin]]
+name = "kenseader"
+path = "src/main.rs"
+
+[dependencies]
+kenseader-core = { path = "../kenseader-core" }
+kenseader-tui = { path = "../kenseader-tui" }
+tokio.workspace = true
+clap.workspace = true
+serde.workspace = true
+toml.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+dirs.workspace = true

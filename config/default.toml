@@ -1,0 +1,57 @@
+# Kenseader Configuration File
+
+[general]
+# Data directory (default: OS-specific local data directory)
+# data_dir = "~/.local/share/kenseader"
+
+# Article retention in days (articles older than this are auto-deleted)
+article_retention_days = 3
+
+# Log level: trace, debug, info, warn, error
+log_level = "info"
+
+[ai]
+# Enable AI summarization
+enabled = true
+
+# AI provider: "claude_cli" or "openai"
+provider = "claude_cli"
+
+# OpenAI API key (required if provider = "openai")
+# openai_api_key = "sk-..."
+
+# OpenAI model name
+openai_model = "gpt-4o-mini"
+
+# Max tokens for summary
+max_summary_tokens = 150
+
+# Concurrent summarization tasks
+concurrency = 2
+
+[ui]
+# UI tick rate in milliseconds
+tick_rate_ms = 100
+
+# Show article author
+show_author = true
+
+# Show timestamps
+show_timestamps = true
+
+# Enable image preview in terminal
+image_preview = true
+
+[sync]
+# Auto-refresh interval in seconds (0 = disabled)
+refresh_interval_secs = 300
+
+# HTTP request timeout in seconds
+request_timeout_secs = 30
+
+# Per-domain rate limit delay in milliseconds
+rate_limit_ms = 1000
+
+[rsshub]
+# RSSHub base URL for rsshub:// protocol conversion
+base_url = "https://rsshub.app"
