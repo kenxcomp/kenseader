@@ -29,6 +29,7 @@ struct ArticleRow {
     read_at: Option<DateTime<Utc>>,
     is_saved: i32,
     created_at: DateTime<Utc>,
+    image_url: Option<String>,
 }
 
 impl From<ArticleRow> for Article {
@@ -50,6 +51,7 @@ impl From<ArticleRow> for Article {
             read_at: row.read_at,
             is_saved: row.is_saved != 0,
             created_at: row.created_at,
+            image_url: row.image_url,
             tags: Vec::new(),
         }
     }
@@ -69,8 +71,8 @@ impl<'a> ArticleRepository<'a> {
         let result = sqlx::query(
             r#"
             INSERT OR IGNORE INTO articles
-            (id, feed_id, guid, url, title, author, content, content_text, published_at, fetched_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, feed_id, guid, url, title, author, content, content_text, published_at, fetched_at, created_at, image_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(id.to_string())
@@ -84,6 +86,7 @@ impl<'a> ArticleRepository<'a> {
         .bind(new_article.published_at)
         .bind(now)
         .bind(now)
+        .bind(&new_article.image_url)
         .execute(self.db.pool())
         .await?;
 
@@ -114,7 +117,7 @@ impl<'a> ArticleRepository<'a> {
             r#"
             SELECT id, feed_id, guid, url, title, author, content, content_text,
                    summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at
+                   is_read, read_at, is_saved, created_at, image_url
             FROM articles
             WHERE id = ?
             "#,
@@ -139,7 +142,7 @@ impl<'a> ArticleRepository<'a> {
             r#"
             SELECT id, feed_id, guid, url, title, author, content, content_text,
                    summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at
+                   is_read, read_at, is_saved, created_at, image_url
             FROM articles
             WHERE feed_id = ? AND is_read = 0
             ORDER BY published_at DESC, created_at DESC
@@ -148,7 +151,7 @@ impl<'a> ArticleRepository<'a> {
             r#"
             SELECT id, feed_id, guid, url, title, author, content, content_text,
                    summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at
+                   is_read, read_at, is_saved, created_at, image_url
             FROM articles
             WHERE feed_id = ?
             ORDER BY published_at DESC, created_at DESC
@@ -169,7 +172,7 @@ impl<'a> ArticleRepository<'a> {
             r#"
             SELECT id, feed_id, guid, url, title, author, content, content_text,
                    summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at
+                   is_read, read_at, is_saved, created_at, image_url
             FROM articles
             WHERE is_read = 0 AND summary IS NOT NULL
             ORDER BY published_at DESC, created_at DESC
@@ -187,7 +190,7 @@ impl<'a> ArticleRepository<'a> {
             r#"
             SELECT id, feed_id, guid, url, title, author, content, content_text,
                    summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at
+                   is_read, read_at, is_saved, created_at, image_url
             FROM articles
             WHERE summary IS NULL AND content_text IS NOT NULL
             ORDER BY created_at DESC
@@ -338,7 +341,7 @@ impl<'a> ArticleRepository<'a> {
                 r#"
                 SELECT id, feed_id, guid, url, title, author, content, content_text,
                        summary, summary_generated_at, published_at, fetched_at,
-                       is_read, read_at, is_saved, created_at
+                       is_read, read_at, is_saved, created_at, image_url
                 FROM articles
                 WHERE feed_id = ? AND (title LIKE ? OR content_text LIKE ?)
                 ORDER BY published_at DESC
@@ -355,7 +358,7 @@ impl<'a> ArticleRepository<'a> {
                 r#"
                 SELECT id, feed_id, guid, url, title, author, content, content_text,
                        summary, summary_generated_at, published_at, fetched_at,
-                       is_read, read_at, is_saved, created_at
+                       is_read, read_at, is_saved, created_at, image_url
                 FROM articles
                 WHERE title LIKE ? OR content_text LIKE ?
                 ORDER BY published_at DESC

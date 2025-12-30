@@ -5,10 +5,13 @@ A high-performance terminal RSS reader with AI-powered summarization.
 ## Features
 
 - **Terminal UI** - Beautiful TUI built with [ratatui](https://github.com/ratatui/ratatui)
+- **Vim-Style Navigation** - Full vim keybindings for efficient navigation
 - **AI Summarization** - Automatic article summaries via Claude CLI or OpenAI
+- **Image Preview** - Inline image display in terminal (Sixel/Kitty/iTerm2)
+- **Search** - Quick search with `/` and navigate matches with `n`/`N`
 - **RSSHub Support** - Native `rsshub://` protocol for easy subscriptions
 - **SQLite Storage** - Fast, local database for feeds and articles
-- **Keyboard-Driven** - Efficient navigation without leaving the terminal
+- **Auto Mark-Read** - Articles automatically marked as read when viewed
 
 ## Installation
 
@@ -29,6 +32,7 @@ cargo build --release
 
 - Rust 1.70+
 - SQLite (bundled via sqlx)
+- Terminal with Sixel/Kitty/iTerm2 support (optional, for image preview)
 
 ## Usage
 
@@ -59,17 +63,51 @@ kenseader run
 | `refresh` | Refresh all feeds |
 | `cleanup` | Clean up old articles |
 
-### Keyboard Shortcuts (TUI)
+## Keyboard Shortcuts (TUI)
+
+### Navigation
 
 | Key | Action |
 |-----|--------|
+| `h` / `←` | Move to left panel |
+| `l` / `→` | Move to right panel |
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
-| `Enter` | Select / Open |
-| `o` | Open article in browser |
+| `gg` | Jump to top (press `g` twice) |
+| `G` | Jump to bottom |
+| `Ctrl+d` | Scroll half page down |
+| `Ctrl+u` | Scroll half page up |
+| `Ctrl+f` | Scroll full page down |
+| `Ctrl+b` | Scroll full page up |
+
+### Actions
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Select / Open article |
+| `b` | Open article in browser (in detail view) |
+| `s` | Toggle saved/bookmark |
+| `d` | Delete subscription (with confirmation) |
 | `r` | Refresh feeds |
-| `s` | Summarize article (AI) |
-| `q` | Quit |
+| `i` | Toggle unread-only mode |
+
+### Search
+
+| Key | Action |
+|-----|--------|
+| `/` | Start forward search |
+| `?` | Start backward search |
+| `n` | Go to next match |
+| `N` | Go to previous match |
+| `Enter` | Confirm search |
+| `Esc` | Cancel search |
+
+### General
+
+| Key | Action |
+|-----|--------|
+| `Esc` | Exit current mode |
+| `q` | Quit application |
 
 ## Configuration
 
@@ -102,6 +140,23 @@ rate_limit_ms = 1000
 [rsshub]
 base_url = "https://rsshub.app"
 ```
+
+### Image Preview
+
+Kenseader supports inline image preview in terminals that support graphical protocols:
+
+- **Sixel** - xterm, mlterm, foot, etc.
+- **Kitty** - Kitty terminal
+- **iTerm2** - iTerm2 on macOS
+
+To enable/disable image preview:
+
+```toml
+[ui]
+image_preview = true  # Set to false to disable
+```
+
+Images are automatically extracted from article content and displayed at the top of the article detail view.
 
 ### AI Providers
 

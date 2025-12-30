@@ -1,10 +1,11 @@
 use ratatui::{
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
+use ratatui_image::{picker::Picker, StatefulImage, Resize};
 
 use crate::app::{App, Focus};
 use crate::theme::GruvboxMaterial;
@@ -27,6 +28,50 @@ impl ArticleDetailWidget {
             .border_style(border_style)
             .style(Style::default().bg(GruvboxMaterial::BG0));
 
+        let inner_area = block.inner(area);
+        frame.render_widget(block, area);
+
+        // Check if we have an image to render
+        let has_image = app.image_cache.as_ref()
+            .map(|c| c.data.is_some())
+            .unwrap_or(false);
+
+        // Split the area if we have an image
+        let (image_area, text_area) = if has_image && app.config.ui.image_preview {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(12), // Image height
+                    Constraint::Min(1),     // Text content
+                ])
+                .split(inner_area);
+            (Some(chunks[0]), chunks[1])
+        } else {
+            (None, inner_area)
+        };
+
+        // Render image if available
+        if let (Some(img_area), Some(cache)) = (image_area, &app.image_cache) {
+            if let Some(ref img_data) = cache.data {
+                // Try to create a picker and render the image
+                if let Ok(mut picker) = Picker::from_query_stdio() {
+                    let protocol = picker.new_resize_protocol(img_data.clone());
+                    let image_widget = StatefulImage::new(None).resize(Resize::Fit(None));
+                    // For StatefulImage, we need a mutable protocol
+                    // This is a simplified approach - in production you'd want to cache the protocol
+                    let mut proto = protocol;
+                    frame.render_stateful_widget(image_widget, img_area, &mut proto);
+                }
+            } else if cache.loading {
+                let loading = Paragraph::new(Line::from(Span::styled(
+                    "Loading image...",
+                    Style::default().fg(GruvboxMaterial::GREY1),
+                )));
+                frame.render_widget(loading, img_area);
+            }
+        }
+
+        // Render text content
         let content = if let Some(article) = app.current_article() {
             let mut lines = Vec::new();
 
@@ -55,6 +100,15 @@ impl ArticleDetailWidget {
             }
             if !meta_spans.is_empty() {
                 lines.push(Line::from(meta_spans));
+                lines.push(Line::from(""));
+            }
+
+            // Image indicator (if has image but not rendered)
+            if article.image_url.is_some() && !has_image {
+                lines.push(Line::from(Span::styled(
+                    "[Image available]",
+                    Style::default().fg(GruvboxMaterial::AQUA),
+                )));
                 lines.push(Line::from(""));
             }
 
@@ -116,10 +170,9 @@ impl ArticleDetailWidget {
         };
 
         let paragraph = Paragraph::new(content)
-            .block(block)
             .wrap(Wrap { trim: true })
             .scroll((app.detail_scroll, 0));
 
-        frame.render_widget(paragraph, area);
+        frame.render_widget(paragraph, text_area);
     }
 }

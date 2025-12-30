@@ -9,9 +9,11 @@ description = "Terminal UI library for Kenseader RSS reader"
 [dependencies]
 kenseader-core = { path = "../kenseader-core" }
 tokio.workspace = true
+reqwest.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 ratatui-image.workspace = true
+image.workspace = true
 chrono.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

@@ -22,6 +22,7 @@ use kenseader_tui::{
     event::{AppEvent, EventHandler},
     input::{handle_key_event, Action},
     widgets::{ArticleDetailWidget, ArticleListWidget, StatusBarWidget, SubscriptionsWidget},
+    ImageCache, load_image,
 };
 
 pub async fn run(db: Arc<Database>, config: Arc<AppConfig>) -> Result<()> {
@@ -124,12 +125,59 @@ async fn load_articles(app: &mut App) -> Result<()> {
         app.articles = article_repo.list_by_feed(feed.id, unread_only).await?;
         app.selected_article = 0;
         app.detail_scroll = 0;
+        app.image_cache = None; // Clear image cache when articles change
     }
 
     Ok(())
 }
 
+/// Load image for the current article if available
+async fn load_article_image(app: &mut App) {
+    // Only load if image preview is enabled
+    if !app.config.ui.image_preview {
+        return;
+    }
+
+    if let Some(article) = app.current_article() {
+        if let Some(ref url) = article.image_url {
+            // Check if we already have this image cached
+            if let Some(ref cache) = app.image_cache {
+                if cache.url == *url {
+                    return; // Already cached
+                }
+            }
+
+            // Start loading the image
+            let url_clone = url.clone();
+            app.image_cache = Some(ImageCache::new(url_clone.clone()));
+
+            // Load image (non-blocking would be better but for simplicity we do it inline)
+            match load_image(&url_clone).await {
+                Ok(img) => {
+                    if let Some(ref mut cache) = app.image_cache {
+                        cache.data = Some(img);
+                        cache.loading = false;
+                    }
+                }
+                Err(e) => {
+                    if let Some(ref mut cache) = app.image_cache {
+                        cache.error = Some(e);
+                        cache.loading = false;
+                    }
+                }
+            }
+        } else {
+            app.image_cache = None;
+        }
+    }
+}
+
 async fn handle_action(app: &mut App, action: Action, db: &Database) -> Result<()> {
+    // Clear pending key on any action except PendingG
+    if action != Action::PendingG && action != Action::JumpToTop {
+        app.clear_pending_key();
+    }
+
     match action {
         Action::Quit => {
             app.should_quit = true;
@@ -138,7 +186,20 @@ async fn handle_action(app: &mut App, action: Action, db: &Database) -> Result<(
             app.focus_left();
         }
         Action::FocusRight => {
+            let prev_focus = app.focus;
             app.focus_right();
+            // Auto mark-read when entering article detail
+            if prev_focus == Focus::ArticleList && app.focus == Focus::ArticleDetail {
+                if let Some(article) = app.current_article() {
+                    if !article.is_read {
+                        let article_repo = ArticleRepository::new(db);
+                        article_repo.mark_read(article.id).await?;
+                        load_articles(app).await?;
+                    }
+                }
+                // Load image for the current article
+                load_article_image(app).await;
+            }
         }
         Action::MoveUp => {
             let prev_feed = app.selected_feed;
@@ -171,9 +232,13 @@ async fn handle_action(app: &mut App, action: Action, db: &Database) -> Result<(
         }
         Action::JumpToTop => {
             app.jump_to_top();
+            app.clear_pending_key();
         }
         Action::JumpToBottom => {
             app.jump_to_bottom();
+        }
+        Action::PendingG => {
+            app.pending_key = Some('g');
         }
         Action::Select => {
             if app.focus == Focus::ArticleList {
@@ -185,6 +250,8 @@ async fn handle_action(app: &mut App, action: Action, db: &Database) -> Result<(
                     load_articles(app).await?;
                 }
                 app.focus = Focus::ArticleDetail;
+                // Load image for the current article
+                load_article_image(app).await;
             }
         }
         Action::OpenInBrowser => {
@@ -212,12 +279,26 @@ async fn handle_action(app: &mut App, action: Action, db: &Database) -> Result<(
             }
         }
         Action::Confirm => {
-            if let Mode::DeleteConfirm(feed_id) = app.mode {
-                let feed_repo = FeedRepository::new(db);
-                feed_repo.delete(feed_id).await?;
-                app.mode = Mode::Normal;
-                load_feeds(app).await?;
-                app.set_status("Feed deleted");
+            match &app.mode {
+                Mode::DeleteConfirm(feed_id) => {
+                    let feed_id = *feed_id;
+                    let feed_repo = FeedRepository::new(db);
+                    feed_repo.delete(feed_id).await?;
+                    app.mode = Mode::Normal;
+                    load_feeds(app).await?;
+                    app.set_status("Feed deleted");
+                }
+                Mode::SearchForward(_) | Mode::SearchBackward(_) => {
+                    app.execute_search();
+                    let match_count = app.search_matches.len();
+                    app.mode = Mode::Normal;
+                    if match_count > 0 {
+                        app.set_status(format!("{} matches found", match_count));
+                    } else {
+                        app.set_status("No matches found");
+                    }
+                }
+                _ => {}
             }
         }
         Action::Cancel => {
@@ -253,8 +334,25 @@ async fn handle_action(app: &mut App, action: Action, db: &Database) -> Result<(
             load_feeds(app).await?;
             app.set_status("Refreshed");
         }
-        Action::NextMatch | Action::PrevMatch => {
-            // Search navigation - TODO implement
+        Action::NextMatch => {
+            app.next_search_match();
+            if !app.search_matches.is_empty() {
+                app.set_status(format!(
+                    "Match {}/{}",
+                    app.current_match + 1,
+                    app.search_matches.len()
+                ));
+            }
+        }
+        Action::PrevMatch => {
+            app.prev_search_match();
+            if !app.search_matches.is_empty() {
+                app.set_status(format!(
+                    "Match {}/{}",
+                    app.current_match + 1,
+                    app.search_matches.len()
+                ));
+            }
         }
         Action::None => {}
     }

@@ -5,6 +5,40 @@ use kenseader_core::storage::Database;
 use kenseader_core::AppConfig;
 use uuid::Uuid;
 
+/// Cached image data for the current article
+pub struct ImageCache {
+    pub url: String,
+    pub data: Option<image::DynamicImage>,
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
+impl ImageCache {
+    pub fn new(url: String) -> Self {
+        Self {
+            url,
+            data: None,
+            loading: true,
+            error: None,
+        }
+    }
+}
+
+/// Download and decode an image from URL
+pub async fn load_image(url: &str) -> Result<image::DynamicImage, String> {
+    let response = reqwest::get(url)
+        .await
+        .map_err(|e| format!("Failed to download: {}", e))?;
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Failed to read bytes: {}", e))?;
+
+    image::load_from_memory(&bytes)
+        .map_err(|e| format!("Failed to decode image: {}", e))
+}
+
 /// Current focus panel in the UI
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -69,6 +103,10 @@ pub struct App {
     pub should_quit: bool,
     /// Status message
     pub status_message: Option<String>,
+    /// Pending key for multi-key sequences (e.g., 'gg')
+    pub pending_key: Option<char>,
+    /// Cached image for current article
+    pub image_cache: Option<ImageCache>,
 }
 
 impl App {
@@ -89,6 +127,8 @@ impl App {
             current_match: 0,
             should_quit: false,
             status_message: None,
+            pending_key: None,
+            image_cache: None,
         }
     }
 
@@ -233,5 +273,62 @@ impl App {
     /// Check if we're in a mode that accepts text input
     pub fn is_input_mode(&self) -> bool {
         matches!(self.mode, Mode::SearchForward(_) | Mode::SearchBackward(_))
+    }
+
+    /// Clear the pending key
+    pub fn clear_pending_key(&mut self) {
+        self.pending_key = None;
+    }
+
+    /// Navigate to next search match
+    pub fn next_search_match(&mut self) {
+        if !self.search_matches.is_empty() {
+            self.current_match = (self.current_match + 1) % self.search_matches.len();
+            if let Some(&idx) = self.search_matches.get(self.current_match) {
+                self.selected_article = idx;
+            }
+        }
+    }
+
+    /// Navigate to previous search match
+    pub fn prev_search_match(&mut self) {
+        if !self.search_matches.is_empty() {
+            self.current_match = if self.current_match == 0 {
+                self.search_matches.len() - 1
+            } else {
+                self.current_match - 1
+            };
+            if let Some(&idx) = self.search_matches.get(self.current_match) {
+                self.selected_article = idx;
+            }
+        }
+    }
+
+    /// Execute search and find matches
+    pub fn execute_search(&mut self) {
+        self.search_matches.clear();
+        self.current_match = 0;
+
+        if self.search_query.is_empty() {
+            return;
+        }
+
+        let query = self.search_query.to_lowercase();
+        for (idx, article) in self.articles.iter().enumerate() {
+            let title_match = article.title.to_lowercase().contains(&query);
+            let content_match = article
+                .content
+                .as_ref()
+                .map(|c| c.to_lowercase().contains(&query))
+                .unwrap_or(false);
+            if title_match || content_match {
+                self.search_matches.push(idx);
+            }
+        }
+
+        // Navigate to first match
+        if let Some(&idx) = self.search_matches.first() {
+            self.selected_article = idx;
+        }
     }
 }

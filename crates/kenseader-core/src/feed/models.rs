@@ -47,6 +47,7 @@ pub struct Article {
     pub read_at: Option<DateTime<Utc>>,
     pub is_saved: bool,
     pub created_at: DateTime<Utc>,
+    pub image_url: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
 }
@@ -62,6 +63,7 @@ pub struct NewArticle {
     pub content: Option<String>,
     pub content_text: Option<String>,
     pub published_at: Option<DateTime<Utc>>,
+    pub image_url: Option<String>,
 }
 
 impl Article {

@@ -87,6 +87,12 @@ impl Database {
             .execute(&self.pool)
             .await?;
 
+        // Add image_url column to articles (migration 007)
+        sqlx::query(MIGRATION_007_ARTICLE_IMAGE_URL)
+            .execute(&self.pool)
+            .await
+            .ok(); // Ignore error if column already exists
+
         tracing::info!("Database migrations completed");
         Ok(())
     }
@@ -196,4 +202,8 @@ CREATE INDEX IF NOT EXISTS idx_behavior_events_type ON behavior_events(event_typ
 CREATE INDEX IF NOT EXISTS idx_behavior_events_created_at ON behavior_events(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_prefs_type ON user_preferences(preference_type);
 CREATE INDEX IF NOT EXISTS idx_user_prefs_window ON user_preferences(time_window)
+"#;
+
+const MIGRATION_007_ARTICLE_IMAGE_URL: &str = r#"
+ALTER TABLE articles ADD COLUMN image_url TEXT
 "#;

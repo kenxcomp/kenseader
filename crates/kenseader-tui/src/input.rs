@@ -16,6 +16,7 @@ pub enum Action {
     ScrollPageUp,
     JumpToTop,
     JumpToBottom,
+    PendingG,  // First 'g' press, waiting for second 'g'
     Select,
     OpenInBrowser,
     Delete,
@@ -77,8 +78,12 @@ pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
 
         // Jump to top/bottom
         (KeyCode::Char('g'), KeyModifiers::NONE) => {
-            // gg requires double press - handled in app
-            Action::JumpToTop
+            // gg requires double press
+            if app.pending_key == Some('g') {
+                Action::JumpToTop
+            } else {
+                Action::PendingG
+            }
         }
         (KeyCode::Char('G'), KeyModifiers::SHIFT) => Action::JumpToBottom,
 
