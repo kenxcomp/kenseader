@@ -43,6 +43,9 @@ impl StatusBarWidget {
         };
 
         let help_hint = " q:quit h/l:panels j/k:move /:search ?:help ";
+        let padding_len = area.width.saturating_sub(
+            status_text.len() as u16 + help_hint.len() as u16,
+        ) as usize;
 
         let line = Line::from(vec![
             Span::styled(
@@ -52,9 +55,10 @@ impl StatusBarWidget {
                     .bg(GruvboxMaterial::BG2),
             ),
             Span::styled(
-                " ".repeat(area.width as usize).chars().take(
-                    area.width.saturating_sub(status_text.len() as u16 + help_hint.len() as u16) as usize
-                ).collect::<String>(),
+                " ".repeat(area.width as usize)
+                    .chars()
+                    .take(padding_len)
+                    .collect::<String>(),
                 Style::default().bg(GruvboxMaterial::BG2),
             ),
             Span::styled(

@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use super::Database;
 use crate::feed::{Article, NewArticle};
-use crate::{Error, Result};
+use crate::Result;
 
 /// Repository for article CRUD operations
 pub struct ArticleRepository<'a> {

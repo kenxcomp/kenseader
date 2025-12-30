@@ -1,5 +1,4 @@
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
-use std::path::Path;
 
 use crate::config::AppConfig;
 use crate::Result;

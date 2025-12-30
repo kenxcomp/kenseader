@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 
-use super::models::{PreferenceType, TimeWindow, UserPreference};
+use super::models::{PreferenceType, TimeWindow};
 use crate::storage::Database;
 use crate::Result;
 
