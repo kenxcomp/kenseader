@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use kenseader_core::feed::{Article, Feed};
@@ -5,38 +6,127 @@ use kenseader_core::storage::Database;
 use kenseader_core::AppConfig;
 use uuid::Uuid;
 
-/// Cached image data for the current article
-pub struct ImageCache {
-    pub url: String,
-    pub data: Option<image::DynamicImage>,
-    pub loading: bool,
-    pub error: Option<String>,
+use crate::rich_content::{ArticleImageCache, ContentElement, RichContent};
+
+/// Rich content state for the current article
+pub struct RichArticleState {
+    /// Parsed content elements
+    pub content: RichContent,
+    /// Image cache for this article
+    pub image_cache: ArticleImageCache,
+    /// Pre-computed line height for each element
+    pub element_heights: Vec<u16>,
+    /// Total content height in lines
+    pub total_height: u16,
+    /// Current viewport height
+    pub viewport_height: u16,
+    /// Image height in terminal rows
+    pub image_height: u16,
 }
 
-impl ImageCache {
-    pub fn new(url: String) -> Self {
+impl RichArticleState {
+    /// Default image height in terminal rows
+    const DEFAULT_IMAGE_HEIGHT: u16 = 12;
+
+    /// Create a new RichArticleState from HTML content
+    pub fn from_html(html: &str, data_dir: Option<&PathBuf>) -> Self {
+        let content = RichContent::from_html(html);
+        let image_cache = ArticleImageCache::new(data_dir);
         Self {
-            url,
-            data: None,
-            loading: true,
-            error: None,
+            content,
+            image_cache,
+            element_heights: Vec::new(),
+            total_height: 0,
+            viewport_height: 0,
+            image_height: Self::DEFAULT_IMAGE_HEIGHT,
         }
     }
-}
 
-/// Download and decode an image from URL
-pub async fn load_image(url: &str) -> Result<image::DynamicImage, String> {
-    let response = reqwest::get(url)
-        .await
-        .map_err(|e| format!("Failed to download: {}", e))?;
+    /// Create from plain text (fallback)
+    pub fn from_text(text: &str, data_dir: Option<&PathBuf>) -> Self {
+        let content = RichContent::from_text(text);
+        let image_cache = ArticleImageCache::new(data_dir);
+        Self {
+            content,
+            image_cache,
+            element_heights: Vec::new(),
+            total_height: 0,
+            viewport_height: 0,
+            image_height: Self::DEFAULT_IMAGE_HEIGHT,
+        }
+    }
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed to read bytes: {}", e))?;
+    /// Calculate heights for all elements given a width
+    pub fn calculate_heights(&mut self, width: u16) {
+        self.element_heights.clear();
+        self.total_height = 0;
 
-    image::load_from_memory(&bytes)
-        .map_err(|e| format!("Failed to decode image: {}", e))
+        for element in &self.content.elements {
+            let height = match element {
+                ContentElement::Text(text) => Self::text_height(text, width),
+                ContentElement::Heading(_, text) => Self::text_height(text, width) + 1,
+                ContentElement::Image { .. } => self.image_height,
+                ContentElement::Quote(text) => Self::text_height(text, width.saturating_sub(2)),
+                ContentElement::Code(text) => text.lines().count() as u16 + 2,
+                ContentElement::ListItem(text) => Self::text_height(text, width.saturating_sub(2)),
+                ContentElement::Separator => 1,
+                ContentElement::EmptyLine => 1,
+            };
+
+            self.element_heights.push(height);
+            self.total_height += height;
+        }
+    }
+
+    /// Calculate text height with word wrapping
+    fn text_height(text: &str, width: u16) -> u16 {
+        if width == 0 {
+            return 1;
+        }
+        let width = width as usize;
+        let mut lines = 0u16;
+        for line in text.lines() {
+            if line.is_empty() {
+                lines += 1;
+            } else {
+                lines += ((line.chars().count() + width - 1) / width) as u16;
+            }
+        }
+        lines.max(1)
+    }
+
+    /// Get image URLs that need loading in the visible range
+    pub fn get_urls_needing_load(&self, scroll: u16, viewport_height: u16) -> Vec<String> {
+        let mut current_y = 0u16;
+        let mut urls = Vec::new();
+
+        for (idx, element) in self.content.elements.iter().enumerate() {
+            let height = self.element_heights.get(idx).copied().unwrap_or(1);
+
+            // Check if element is in visible range (with some margin for preloading)
+            let in_range = current_y + height > scroll.saturating_sub(20)
+                && current_y < scroll + viewport_height + 20;
+
+            if in_range {
+                if let ContentElement::Image { url, .. } = element {
+                    if !self.image_cache.is_ready(url) && !self.image_cache.is_loading(url) {
+                        urls.push(url.clone());
+                    }
+                }
+            }
+
+            current_y += height;
+        }
+
+        urls
+    }
+
+    /// Clear all cached data
+    pub fn clear(&mut self) {
+        self.image_cache.clear();
+        self.element_heights.clear();
+        self.total_height = 0;
+    }
 }
 
 /// Current focus panel in the UI
@@ -105,8 +195,8 @@ pub struct App {
     pub status_message: Option<String>,
     /// Pending key for multi-key sequences (e.g., 'gg')
     pub pending_key: Option<char>,
-    /// Cached image for current article
-    pub image_cache: Option<ImageCache>,
+    /// Rich content state for current article (replaces image_cache)
+    pub rich_state: Option<RichArticleState>,
 }
 
 impl App {
@@ -128,7 +218,7 @@ impl App {
             should_quit: false,
             status_message: None,
             pending_key: None,
-            image_cache: None,
+            rich_state: None,
         }
     }
 
@@ -140,6 +230,11 @@ impl App {
     /// Get the currently selected article
     pub fn current_article(&self) -> Option<&Article> {
         self.articles.get(self.selected_article)
+    }
+
+    /// Get the currently selected article mutably
+    pub fn current_article_mut(&mut self) -> Option<&mut Article> {
+        self.articles.get_mut(self.selected_article)
     }
 
     /// Move focus to the next panel (right)
