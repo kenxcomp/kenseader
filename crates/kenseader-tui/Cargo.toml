@@ -19,3 +19,4 @@ anyhow.workspace = true
 tracing.workspace = true
 open.workspace = true
 uuid.workspace = true
+url.workspace = true

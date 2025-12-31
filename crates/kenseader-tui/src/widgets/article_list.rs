@@ -1,6 +1,6 @@
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
     Frame,
@@ -34,6 +34,13 @@ impl ArticleListWidget {
             .border_style(border_style)
             .style(Style::default().bg(GruvboxMaterial::BG0));
 
+        // Check if we're searching
+        let search_query = if !app.search_query.is_empty() {
+            Some(app.search_query.to_lowercase())
+        } else {
+            None
+        };
+
         let items: Vec<ListItem> = app
             .articles
             .iter()
@@ -44,11 +51,10 @@ impl ArticleListWidget {
 
                 let title = &article.title;
 
-                let style = if i == app.selected_article && is_focused {
+                let base_style = if i == app.selected_article && is_focused {
                     Style::default()
                         .fg(GruvboxMaterial::FG0)
                         .bg(GruvboxMaterial::SELECTION)
-                        .add_modifier(Modifier::BOLD)
                 } else if !article.is_read {
                     Style::default().fg(GruvboxMaterial::UNREAD)
                 } else {
@@ -58,14 +64,21 @@ impl ArticleListWidget {
                 let marker_style = Style::default().fg(GruvboxMaterial::YELLOW);
                 let saved_style = Style::default().fg(GruvboxMaterial::ORANGE);
 
-                let line = Line::from(vec![
+                // Build title spans with search highlighting
+                let title_spans = if let Some(ref query) = search_query {
+                    Self::highlight_matches(title, query, base_style)
+                } else {
+                    vec![Span::styled(title.clone(), base_style)]
+                };
+
+                let mut spans = vec![
                     Span::styled(read_marker, marker_style),
                     Span::styled(saved_marker, saved_style),
                     Span::raw(" "),
-                    Span::styled(title.clone(), style),
-                ]);
+                ];
+                spans.extend(title_spans);
 
-                ListItem::new(line)
+                ListItem::new(Line::from(spans))
             })
             .collect();
 
@@ -73,13 +86,57 @@ impl ArticleListWidget {
             .block(block)
             .highlight_style(
                 Style::default()
-                    .bg(GruvboxMaterial::SELECTION)
-                    .add_modifier(Modifier::BOLD),
+                    .bg(GruvboxMaterial::SELECTION),
             );
 
         let mut state = ListState::default();
         state.select(Some(app.selected_article));
 
         frame.render_stateful_widget(list, area, &mut state);
+    }
+
+    /// Highlight matching parts of a string with a different color
+    fn highlight_matches<'a>(text: &'a str, query: &str, base_style: Style) -> Vec<Span<'a>> {
+        let mut spans = Vec::new();
+        let text_lower = text.to_lowercase();
+        let mut last_end = 0;
+
+        // Find all occurrences of the query in the text
+        for (start, _) in text_lower.match_indices(query) {
+            // Add non-matching part before this match
+            if start > last_end {
+                spans.push(Span::styled(
+                    text[last_end..start].to_string(),
+                    base_style,
+                ));
+            }
+
+            // Add the matching part with highlight style
+            let end = start + query.len();
+            let highlight_style = base_style
+                .fg(GruvboxMaterial::BG0)
+                .bg(GruvboxMaterial::YELLOW);
+            spans.push(Span::styled(
+                text[start..end].to_string(),
+                highlight_style,
+            ));
+
+            last_end = end;
+        }
+
+        // Add remaining non-matching part
+        if last_end < text.len() {
+            spans.push(Span::styled(
+                text[last_end..].to_string(),
+                base_style,
+            ));
+        }
+
+        // If no matches found, return the whole text with base style
+        if spans.is_empty() {
+            spans.push(Span::styled(text.to_string(), base_style));
+        }
+
+        spans
     }
 }

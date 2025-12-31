@@ -1,17 +1,36 @@
 # Kenseader
 
-A high-performance terminal RSS reader with AI-powered summarization.
+A high-performance terminal RSS reader with AI-powered summarization and rich content display.
 
 ## Features
 
 - **Terminal UI** - Beautiful TUI built with [ratatui](https://github.com/ratatui/ratatui)
 - **Vim-Style Navigation** - Full vim keybindings for efficient navigation
 - **AI Summarization** - Automatic article summaries via Claude CLI or OpenAI
-- **Image Preview** - Inline image display in terminal (Sixel/Kitty/iTerm2)
-- **Search** - Quick search with `/` and navigate matches with `n`/`N`
+- **Inline Image Display** - Images displayed at their original positions within article content
+- **Rich Content Rendering** - Styled headings, quotes, code blocks, and lists
+- **Protocol Auto-Detection** - Automatically selects best image protocol (Sixel/Kitty/iTerm2/Halfblocks)
+- **Search** - Real-time search with `/` and navigate matches with `n`/`N`
 - **RSSHub Support** - Native `rsshub://` protocol for easy subscriptions
 - **SQLite Storage** - Fast, local database for feeds and articles
 - **Auto Mark-Read** - Articles automatically marked as read when viewed
+
+## Screenshots
+
+```
+┌─ Subscriptions ─┬─ Articles ──────────────────┬─ Article ─────────────────────┐
+│ > Hacker News   │ ● Building a Rust CLI       │ Building a Rust CLI           │
+│   Rust Blog     │   New features in 1.75      │                               │
+│   GitHub Trend  │ ● Understanding async/await │ By John Doe | 2024-01-15      │
+│                 │   Memory safety explained   │                               │
+│                 │                             │ [Image displayed here]        │
+│                 │                             │                               │
+│                 │                             │ This article explains how to  │
+│                 │                             │ build command-line tools...   │
+├─────────────────┴─────────────────────────────┴───────────────────────────────┤
+│ All | Subscriptions | 4 articles | q:quit h/l:panels j/k:move /:search        │
+└───────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Installation
 
@@ -32,7 +51,7 @@ cargo build --release
 
 - Rust 1.70+
 - SQLite (bundled via sqlx)
-- Terminal with Sixel/Kitty/iTerm2 support (optional, for image preview)
+- Terminal with true color support (required for image display)
 
 ## Usage
 
@@ -141,30 +160,64 @@ rate_limit_ms = 1000
 base_url = "https://rsshub.app"
 ```
 
-### Image Preview
+## Image Display
 
-Kenseader supports inline image preview in terminals that support graphical protocols:
+Kenseader displays images inline within article content, at their original positions. The system automatically detects your terminal's capabilities and selects the best rendering method.
 
-- **Sixel** - xterm, mlterm, foot, etc.
-- **Kitty** - Kitty terminal
-- **iTerm2** - iTerm2 on macOS
+### Supported Protocols
 
-To enable/disable image preview:
+| Protocol | Terminals | Quality |
+|----------|-----------|---------|
+| **Kitty Graphics** | Kitty | Highest |
+| **iTerm2 Inline** | iTerm2 | High |
+| **Sixel** | xterm, mlterm, foot, WezTerm, GNOME Terminal | High |
+| **Halfblocks** | All terminals with true color | Medium |
+
+### How It Works
+
+1. **Auto-Detection** - Terminal capabilities are detected on startup
+2. **Visible-First Loading** - Only images in the viewport are loaded first
+3. **Async Download** - Images are downloaded in the background without blocking UI
+4. **Dual Cache** - Memory cache for fast access + disk cache for persistence
+5. **Fallback** - Graceful degradation to Unicode halfblock characters if no graphics protocol is available
+
+### Configuration
 
 ```toml
 [ui]
-image_preview = true  # Set to false to disable
+image_preview = true  # Set to false to disable images entirely
 ```
 
-Images are automatically extracted from article content and displayed at the top of the article detail view.
+### Terminal Compatibility
 
-### AI Providers
+For the best image quality, use a terminal with native graphics support:
 
-#### Claude CLI (Default)
+- **macOS**: iTerm2, Kitty, WezTerm
+- **Linux**: Kitty, foot, WezTerm, GNOME Terminal (with Sixel enabled)
+- **Windows**: Windows Terminal (via WSL with Kitty/WezTerm)
+
+For terminals without graphics support, images are rendered using Unicode halfblock characters (`▀`) with true colors. This works in any terminal supporting 24-bit color.
+
+## Rich Content Rendering
+
+Article content is parsed and rendered with formatting:
+
+| Element | Display Style |
+|---------|---------------|
+| **Headings** | Bold, colored by level (H1: orange, H2: yellow, H3+: aqua) |
+| **Quotes** | Italic with `|` prefix |
+| **Code** | Green text with dark background |
+| **Lists** | Bullet points with `•` prefix |
+| **Links** | Displayed inline |
+| **Images** | Rendered at original position |
+
+## AI Providers
+
+### Claude CLI (Default)
 
 Uses the Claude CLI for summarization. Requires [Claude CLI](https://github.com/anthropics/claude-cli) to be installed and authenticated.
 
-#### OpenAI
+### OpenAI
 
 Set `provider = "openai"` and provide your API key:
 
@@ -175,7 +228,7 @@ openai_api_key = "sk-your-key-here"
 openai_model = "gpt-4o-mini"
 ```
 
-### RSSHub Protocol
+## RSSHub Protocol
 
 Subscribe to RSSHub routes directly:
 
@@ -197,11 +250,42 @@ base_url = "https://your-rsshub-instance.com"
 ```
 kenseader/
 ├── crates/
-│   ├── kenseader-cli/    # CLI application
-│   ├── kenseader-core/   # Core library (feed, storage, AI)
+│   ├── kenseader-cli/    # CLI application and main entry point
+│   ├── kenseader-core/   # Core library (feed parsing, storage, AI)
 │   └── kenseader-tui/    # Terminal UI components
+│       ├── app.rs        # Application state management
+│       ├── rich_content.rs  # HTML parsing and image handling
+│       └── widgets/      # UI widgets (article detail, list, etc.)
 └── Cargo.toml            # Workspace configuration
 ```
+
+## Performance
+
+- **Lazy Loading** - Only visible images are loaded
+- **Async I/O** - Non-blocking network and database operations
+- **Memory Management** - Image cache limited to 20 images
+- **Disk Cache** - Images cached at `~/.cache/kenseader/image_cache/`
+
+## Troubleshooting
+
+### Images Not Displaying
+
+1. Ensure `image_preview = true` in config
+2. Check terminal supports true color: `echo $COLORTERM` should output `truecolor` or `24bit`
+3. For best results, use iTerm2, Kitty, or WezTerm
+
+### Slow Image Loading
+
+1. Images are loaded asynchronously - scroll slowly to allow loading
+2. Check network connection
+3. Some websites block image hotlinking
+
+### Memory Usage
+
+If memory usage is high with many images:
+- Images are automatically evicted from cache when limit is reached
+- Restart the application to clear memory cache
+- Disk cache persists between sessions
 
 ## License
 

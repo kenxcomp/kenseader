@@ -13,14 +13,17 @@ pub struct StatusBarWidget;
 
 impl StatusBarWidget {
     pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+        // Check if in search mode - show search input prominently
+        let is_search_mode = app.is_input_mode();
+
         let mode_str = match &app.mode {
             Mode::Normal => match app.view_mode {
                 ViewMode::All => "NORMAL",
                 ViewMode::UnreadOnly => "UNREAD",
             },
-            Mode::SearchForward(_) => "SEARCH /",
-            Mode::SearchBackward(_) => "SEARCH ?",
-            Mode::DeleteConfirm(_) => "DELETE?",
+            Mode::SearchForward(_) => "SEARCH",
+            Mode::SearchBackward(_) => "SEARCH",
+            Mode::DeleteConfirm(_) => "DELETE? (y/n)",
             Mode::Help => "HELP",
         };
 
@@ -33,7 +36,25 @@ impl StatusBarWidget {
         let feed_count = app.feeds.len();
         let article_count = app.articles.len();
 
-        let status_text = if let Some(msg) = &app.status_message {
+        let status_text = if is_search_mode {
+            // Show search prompt with cursor and match count
+            let search_char = match &app.mode {
+                Mode::SearchForward(_) => "/",
+                Mode::SearchBackward(_) => "?",
+                _ => "/",
+            };
+            let match_info = if !app.search_query.is_empty() {
+                let count = app.search_matches.len();
+                if count > 0 {
+                    format!(" ({} matches)", count)
+                } else {
+                    " (no matches)".to_string()
+                }
+            } else {
+                String::new()
+            };
+            format!(" {}{}_{}", search_char, app.search_query, match_info)
+        } else if let Some(msg) = &app.status_message {
             msg.clone()
         } else {
             format!(
