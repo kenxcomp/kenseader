@@ -275,7 +275,16 @@ async fn handle_action(
             app.should_quit = true;
         }
         Action::FocusLeft => {
+            let prev_focus = app.focus;
             app.focus_left();
+            // Reload articles when returning from ArticleDetail to ArticleList in unread-only mode
+            // This removes the just-read article from the filtered list
+            if prev_focus == Focus::ArticleDetail
+                && app.focus == Focus::ArticleList
+                && matches!(app.view_mode, ViewMode::UnreadOnly)
+            {
+                load_articles_preserve_selection(app, true).await?;
+            }
         }
         Action::FocusRight => {
             let prev_focus = app.focus;
@@ -284,9 +293,13 @@ async fn handle_action(
             if prev_focus == Focus::ArticleList && app.focus == Focus::ArticleDetail {
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
+                        let article_id = article.id;
                         let article_repo = ArticleRepository::new(db);
-                        article_repo.mark_read(article.id).await?;
-                        load_articles_preserve_selection(app, true).await?;
+                        article_repo.mark_read(article_id).await?;
+                        // Update local state without reloading (keeps article visible in unread-only mode)
+                        if let Some(article) = app.current_article_mut() {
+                            article.is_read = true;
+                        }
                     }
                 }
                 // Initialize rich content state
@@ -346,10 +359,15 @@ async fn handle_action(
             if app.focus == Focus::ArticleList {
                 // Mark as read and switch to detail
                 if let Some(article) = app.current_article() {
-                    let article_repo = ArticleRepository::new(db);
-                    article_repo.mark_read(article.id).await?;
-                    // Reload to reflect change, preserving selection
-                    load_articles_preserve_selection(app, true).await?;
+                    if !article.is_read {
+                        let article_id = article.id;
+                        let article_repo = ArticleRepository::new(db);
+                        article_repo.mark_read(article_id).await?;
+                        // Update local state without reloading (keeps article visible in unread-only mode)
+                        if let Some(article) = app.current_article_mut() {
+                            article.is_read = true;
+                        }
+                    }
                 }
                 app.focus = Focus::ArticleDetail;
                 // Initialize rich content state

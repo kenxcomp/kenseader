@@ -232,6 +232,11 @@ impl App {
         self.articles.get(self.selected_article)
     }
 
+    /// Get the currently selected article mutably
+    pub fn current_article_mut(&mut self) -> Option<&mut Article> {
+        self.articles.get_mut(self.selected_article)
+    }
+
     /// Move focus to the next panel (right)
     pub fn focus_right(&mut self) {
         self.focus = match self.focus {
