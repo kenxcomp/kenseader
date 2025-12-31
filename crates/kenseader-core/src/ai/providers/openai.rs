@@ -6,6 +6,13 @@ use async_openai::{
 use super::AiProvider;
 use crate::{Error, Result};
 
+fn truncate_chars(input: &str, max_chars: usize) -> &str {
+    match input.char_indices().nth(max_chars) {
+        Some((idx, _)) => &input[..idx],
+        None => input,
+    }
+}
+
 /// OpenAI API provider
 pub struct OpenAiProvider {
     client: Client<async_openai::config::OpenAIConfig>,
@@ -56,11 +63,7 @@ impl OpenAiProvider {
 #[async_trait::async_trait]
 impl AiProvider for OpenAiProvider {
     async fn summarize(&self, content: &str) -> Result<String> {
-        let truncated = if content.len() > 4000 {
-            &content[..4000]
-        } else {
-            content
-        };
+        let truncated = truncate_chars(content, 4000);
 
         let prompt = format!(
             "Summarize the following article in 2-3 sentences. Be concise and focus on the key points:\n\n{}",
@@ -71,11 +74,7 @@ impl AiProvider for OpenAiProvider {
     }
 
     async fn extract_tags(&self, content: &str) -> Result<Vec<String>> {
-        let truncated = if content.len() > 4000 {
-            &content[..4000]
-        } else {
-            content
-        };
+        let truncated = truncate_chars(content, 4000);
 
         let prompt = format!(
             "Extract 3-5 topic tags from the following article. Return only the tags as a comma-separated list, nothing else:\n\n{}",
@@ -98,11 +97,7 @@ impl AiProvider for OpenAiProvider {
             return Ok(0.5);
         }
 
-        let truncated = if content.len() > 3000 {
-            &content[..3000]
-        } else {
-            content
-        };
+        let truncated = truncate_chars(content, 3000);
 
         let interests_str = interests.join(", ");
         let prompt = format!(

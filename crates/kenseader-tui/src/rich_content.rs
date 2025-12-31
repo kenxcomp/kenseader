@@ -6,6 +6,8 @@ use image::DynamicImage;
 use ratatui_image::picker::Picker;
 use ratatui_image::protocol::Protocol;
 
+const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+
 /// Get the global image picker instance with automatic protocol detection
 pub fn get_image_picker() -> &'static Picker {
     static PICKER: OnceLock<Picker> = OnceLock::new();
@@ -203,21 +205,19 @@ impl RichContent {
 fn remove_tags(html: &str, tags: &[&str]) -> String {
     let mut result = html.to_string();
     for tag in tags {
-        // Remove <tag>...</tag>
-        let pattern = format!("<{}[^>]*>", tag);
+        let start_pattern = format!("<{}", tag);
         let end_pattern = format!("</{}>", tag);
 
         loop {
-            if let Some(start) = result.to_lowercase().find(&pattern.to_lowercase()) {
-                if let Some(end_start) = result[start..].to_lowercase().find(&end_pattern.to_lowercase()) {
-                    let end = start + end_start + end_pattern.len();
-                    result = format!("{}{}", &result[..start], &result[end..]);
-                } else {
-                    break;
-                }
-            } else {
+            let lower: Vec<u8> = result.as_bytes().iter().map(|b| b.to_ascii_lowercase()).collect();
+            let Some(start) = find_subslice(&lower, start_pattern.as_bytes()) else {
                 break;
-            }
+            };
+            let Some(end_start) = find_subslice(&lower[start..], end_pattern.as_bytes()) else {
+                break;
+            };
+            let end = start + end_start + end_pattern.len();
+            result.replace_range(start..end, "");
         }
     }
     result
@@ -500,6 +500,12 @@ fn collapse_empty_lines(elements: Vec<ContentElement>) -> Vec<ContentElement> {
     result
 }
 
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
 /// In-memory image cache for the current article
 pub struct ArticleImageCache {
     /// Image states keyed by URL
@@ -595,6 +601,7 @@ impl ArticleImageCache {
 
 /// Download image and decode it
 pub async fn download_image(url: &str) -> Result<(Vec<u8>, DynamicImage), String> {
+    parse_http_url(url)?;
     let bytes = download_image_bytes(url).await?;
     let image = decode_image_bytes(&bytes)?;
     Ok((bytes, image))
@@ -604,19 +611,19 @@ pub async fn download_image(url: &str) -> Result<(Vec<u8>, DynamicImage), String
 async fn download_image_bytes(url: &str) -> Result<Vec<u8>, String> {
     use std::process::Command;
 
-    let referer = url::Url::parse(url)
-        .ok()
-        .map(|u| format!("{}:/{{}}/{}", u.scheme(), u.host_str().unwrap_or("")))
-        .unwrap_or_default();
+    let parsed = parse_http_url(url)?;
+    let referer = build_referer(&parsed);
 
     let output = tokio::task::spawn_blocking({
         let url = url.to_string();
         let referer = referer.clone();
         move || {
+            let max_bytes = MAX_IMAGE_BYTES.to_string();
             Command::new("curl")
                 .args([
                     "-sL",
                     "--max-time", "15",
+                    "--max-filesize", &max_bytes,
                     "-A", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
                     "-H", &format!("Referer: {}", referer),
                     "-H", "Accept: image/png,image/jpeg,image/gif,image/*;q=0.8",
@@ -630,6 +637,9 @@ async fn download_image_bytes(url: &str) -> Result<Vec<u8>, String> {
     .map_err(|e| format!("Curl failed: {}", e))?;
 
     if output.status.success() && !output.stdout.is_empty() {
+        if output.stdout.len() > MAX_IMAGE_BYTES {
+            return Err(format!("Image too large ({}B)", output.stdout.len()));
+        }
         Ok(output.stdout)
     } else {
         // Fallback to reqwest
@@ -639,10 +649,8 @@ async fn download_image_bytes(url: &str) -> Result<Vec<u8>, String> {
 
 /// Fallback download using reqwest
 async fn download_with_reqwest(url: &str) -> Result<Vec<u8>, String> {
-    let referer = url::Url::parse(url)
-        .ok()
-        .map(|u| format!("{}:/{{}}/{}", u.scheme(), u.host_str().unwrap_or("")))
-        .unwrap_or_default();
+    let parsed = parse_http_url(url)?;
+    let referer = build_referer(&parsed);
 
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
@@ -663,11 +671,22 @@ async fn download_with_reqwest(url: &str) -> Result<Vec<u8>, String> {
         return Err(format!("HTTP {}", response.status()));
     }
 
-    response
+    if let Some(len) = response.content_length() {
+        if len as usize > MAX_IMAGE_BYTES {
+            return Err(format!("Image too large ({}B)", len));
+        }
+    }
+
+    let bytes = response
         .bytes()
         .await
-        .map(|b| b.to_vec())
-        .map_err(|e| format!("Read error: {}", e))
+        .map_err(|e| format!("Read error: {}", e))?;
+
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(format!("Image too large ({}B)", bytes.len()));
+    }
+
+    Ok(bytes.to_vec())
 }
 
 /// Decode image bytes with format detection
@@ -702,6 +721,24 @@ fn decode_image_bytes(bytes: &[u8]) -> Result<DynamicImage, String> {
     }
 
     Err(format!("Unknown format ({}B)", bytes.len()))
+}
+
+fn parse_http_url(url: &str) -> Result<url::Url, String> {
+    let parsed = url::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(parsed),
+        scheme => Err(format!("Unsupported URL scheme: {}", scheme)),
+    }
+}
+
+fn build_referer(parsed: &url::Url) -> String {
+    match parsed.host_str() {
+        Some(host) => match parsed.port() {
+            Some(port) => format!("{}://{}:{}", parsed.scheme(), host, port),
+            None => format!("{}://{}", parsed.scheme(), host),
+        },
+        None => String::new(),
+    }
 }
 
 #[cfg(test)]
