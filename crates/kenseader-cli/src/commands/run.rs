@@ -44,13 +44,16 @@ pub async fn run(db: Arc<Database>, config: Arc<AppConfig>) -> Result<()> {
     // Create event handler
     let event_handler = EventHandler::new(config.ui.tick_rate_ms);
 
-    // Create channel for async image loading results
-    let (img_tx, mut img_rx) = mpsc::unbounded_channel::<ImageLoadResult>();
-
     // Get data directory for disk cache
     let data_dir = dirs::data_dir()
         .map(|d| d.join("kenseader"))
         .or_else(|| dirs::home_dir().map(|d| d.join(".kenseader")));
+
+    // Initialize rich state for the first article
+    init_rich_article_state(&mut app, data_dir.as_ref());
+
+    // Create channel for async image loading results
+    let (img_tx, mut img_rx) = mpsc::unbounded_channel::<ImageLoadResult>();
 
     // Main loop
     loop {
@@ -221,9 +224,8 @@ async fn load_articles_preserve_selection(app: &mut App, preserve: bool) -> Resu
             app.detail_scroll = 0;
         }
 
-        if !preserve {
-            app.rich_state = None; // Clear rich state when articles change
-        }
+        // Always clear rich state when articles change - it will be re-initialized on demand
+        app.rich_state = None;
     }
 
     Ok(())
@@ -284,6 +286,8 @@ async fn handle_action(
                 && matches!(app.view_mode, ViewMode::UnreadOnly)
             {
                 load_articles_preserve_selection(app, true).await?;
+                // Clear rich state since the article at the current index may have changed
+                app.rich_state = None;
             }
         }
         Action::FocusRight => {
@@ -291,6 +295,8 @@ async fn handle_action(
             app.focus_right();
             // Auto mark-read when entering article detail
             if prev_focus == Focus::ArticleList && app.focus == Focus::ArticleDetail {
+                // Reset scroll to top (like vim 'gg')
+                app.detail_scroll = 0;
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
                         let article_id = article.id;
@@ -312,10 +318,14 @@ async fn handle_action(
             app.move_up();
             if app.focus == Focus::Subscriptions && prev_feed != app.selected_feed {
                 load_articles(app).await?;
+                // Initialize rich state for the first article in the new feed
+                init_rich_article_state(app, data_dir);
             }
-            // Clear rich state when article changes
+            // Re-initialize rich state when article changes to ensure consistent rendering
             if app.focus == Focus::ArticleList && prev_article != app.selected_article {
+                app.detail_scroll = 0; // Reset scroll to top
                 app.rich_state = None;
+                init_rich_article_state(app, data_dir);
             }
         }
         Action::MoveDown => {
@@ -324,10 +334,14 @@ async fn handle_action(
             app.move_down();
             if app.focus == Focus::Subscriptions && prev_feed != app.selected_feed {
                 load_articles(app).await?;
+                // Initialize rich state for the first article in the new feed
+                init_rich_article_state(app, data_dir);
             }
-            // Clear rich state when article changes
+            // Re-initialize rich state when article changes to ensure consistent rendering
             if app.focus == Focus::ArticleList && prev_article != app.selected_article {
+                app.detail_scroll = 0; // Reset scroll to top
                 app.rich_state = None;
+                init_rich_article_state(app, data_dir);
             }
         }
         Action::ScrollHalfPageDown => {
@@ -453,10 +467,22 @@ async fn handle_action(
             app.execute_search();
         }
         Action::Refresh => {
-            app.set_status("Refreshing...");
-            // This would ideally be done in a background task
-            load_feeds(app).await?;
-            app.set_status("Refreshed");
+            app.set_status("Refreshing feeds...");
+            // Fetch new articles from all feeds
+            match kenseader_core::scheduler::refresh_all_feeds(db, &app.config).await {
+                Ok(new_count) => {
+                    // Reload data from database
+                    load_feeds(app).await?;
+                    if new_count > 0 {
+                        app.set_status(format!("Refreshed: {} new articles", new_count));
+                    } else {
+                        app.set_status("Refreshed: no new articles");
+                    }
+                }
+                Err(e) => {
+                    app.set_status(format!("Refresh failed: {}", e));
+                }
+            }
         }
         Action::NextMatch => {
             app.next_search_match();

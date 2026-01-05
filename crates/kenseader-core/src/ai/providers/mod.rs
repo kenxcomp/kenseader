@@ -1,14 +1,41 @@
+mod claude_api;
 mod claude_cli;
+mod cli_base;
+mod gemini_api;
 mod openai;
 
+pub use claude_api::ClaudeApiProvider;
 pub use claude_cli::ClaudeCliProvider;
+pub use cli_base::{CliProvider, CliType};
+pub use gemini_api::GeminiApiProvider;
 pub use openai::OpenAiProvider;
 
 use crate::Result;
 
+/// Article info for batch summarization
+#[derive(Debug, Clone)]
+pub struct ArticleForSummary {
+    pub id: String,
+    pub title: String,
+    pub content: String,
+}
+
+/// Result of batch summarization
+#[derive(Debug, Clone)]
+pub struct BatchSummaryResult {
+    pub id: String,
+    pub summary: Option<String>,
+    pub error: Option<String>,
+}
+
 /// Trait for AI summarization providers
 #[async_trait::async_trait]
 pub trait AiProvider: Send + Sync {
+    /// Get the configured summary language
+    fn language(&self) -> &str {
+        "English"
+    }
+
     /// Generate a summary for the given content
     async fn summarize(&self, content: &str) -> Result<String>;
 
@@ -17,4 +44,18 @@ pub trait AiProvider: Send + Sync {
 
     /// Score article relevance based on user interests
     async fn score_relevance(&self, content: &str, interests: &[String]) -> Result<f64>;
+
+    /// Batch summarize multiple articles in one API call
+    /// Returns a vector of results matching the input order
+    async fn batch_summarize(&self, articles: Vec<ArticleForSummary>) -> Result<Vec<BatchSummaryResult>>;
+
+    /// Get the maximum token/character limit for batch processing
+    fn batch_char_limit(&self) -> usize {
+        80000 // ~20K tokens, conservative default
+    }
+
+    /// Get minimum content length for summarization
+    fn min_content_length(&self) -> usize {
+        1000
+    }
 }

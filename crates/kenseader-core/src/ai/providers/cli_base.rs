@@ -10,45 +10,104 @@ fn truncate_chars(input: &str, max_chars: usize) -> &str {
     }
 }
 
-/// Claude CLI provider - uses `claude -p` command
-pub struct ClaudeCliProvider {
+/// CLI provider type
+#[derive(Debug, Clone, Copy)]
+pub enum CliType {
+    Claude,
+    Gemini,
+    Codex,
+}
+
+impl CliType {
+    fn command(&self) -> &'static str {
+        match self {
+            CliType::Claude => "claude",
+            CliType::Gemini => "gemini",
+            CliType::Codex => "codex",
+        }
+    }
+
+    fn base_args(&self) -> Vec<&'static str> {
+        match self {
+            CliType::Claude => vec!["-p", "--tools", ""],
+            CliType::Gemini => vec!["-p"],
+            CliType::Codex => vec!["exec"],  // Codex uses exec subcommand
+        }
+    }
+
+    fn uses_stdin(&self) -> bool {
+        match self {
+            CliType::Claude | CliType::Gemini => true,
+            CliType::Codex => false,  // Codex takes prompt as command line argument
+        }
+    }
+}
+
+/// Generic CLI provider for Claude, Gemini, Codex
+pub struct CliProvider {
+    cli_type: CliType,
     language: String,
 }
 
-impl ClaudeCliProvider {
-    pub fn new(language: &str) -> Self {
+impl CliProvider {
+    pub fn new(cli_type: CliType, language: &str) -> Self {
         Self {
+            cli_type,
             language: language.to_string(),
         }
     }
 
-    fn run_claude(&self, prompt: &str) -> Result<String> {
+    fn run_cli(&self, prompt: &str) -> Result<String> {
         use std::io::Write;
         use std::process::Stdio;
 
-        // Use stdin to pass prompt (avoids shell escaping issues with long/special content)
-        let mut child = Command::new("claude")
-            .arg("-p")
-            .arg("--tools")
-            .arg("")  // Disable tools for pure text generation
+        let mut cmd = Command::new(self.cli_type.command());
+        for arg in self.cli_type.base_args() {
+            cmd.arg(arg);
+        }
+
+        // Codex: prompt as command line argument
+        if !self.cli_type.uses_stdin() {
+            cmd.arg(prompt);
+        }
+
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| Error::AiProvider(format!("Failed to spawn claude CLI: {}", e)))?;
+            .map_err(|e| Error::AiProvider(format!(
+                "Failed to spawn {} CLI: {}",
+                self.cli_type.command(),
+                e
+            )))?;
 
-        // Write prompt to stdin
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(prompt.as_bytes())
-                .map_err(|e| Error::AiProvider(format!("Failed to write to claude stdin: {}", e)))?;
+        // Claude/Gemini: prompt via stdin
+        if self.cli_type.uses_stdin() {
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(prompt.as_bytes())
+                    .map_err(|e| Error::AiProvider(format!(
+                        "Failed to write to {} stdin: {}",
+                        self.cli_type.command(),
+                        e
+                    )))?;
+            }
         }
 
         let output = child.wait_with_output()
-            .map_err(|e| Error::AiProvider(format!("Failed to wait for claude CLI: {}", e)))?;
+            .map_err(|e| Error::AiProvider(format!(
+                "Failed to wait for {} CLI: {}",
+                self.cli_type.command(),
+                e
+            )))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::AiProvider(format!("Claude CLI error: {}", stderr)));
+            return Err(Error::AiProvider(format!(
+                "{} CLI error: {}",
+                self.cli_type.command(),
+                stderr
+            )));
         }
 
         let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -57,13 +116,12 @@ impl ClaudeCliProvider {
 }
 
 #[async_trait::async_trait]
-impl AiProvider for ClaudeCliProvider {
+impl AiProvider for CliProvider {
     fn language(&self) -> &str {
         &self.language
     }
 
     async fn summarize(&self, content: &str) -> Result<String> {
-        // Skip if content is too short (less than 1000 chars) or looks like just a URL
         let trimmed = content.trim();
         if trimmed.len() < 1000 {
             return Err(Error::AiProvider(format!(
@@ -78,9 +136,8 @@ impl AiProvider for ClaudeCliProvider {
         }
 
         let truncated = truncate_chars(content, 4000);
-        let language = self.language.clone();
+        let language = &self.language;
 
-        // Clear prompt that tells Claude to use ONLY the provided text
         let prompt = format!(
             "Below is the full text of an article. Summarize it in 2-3 sentences in {language}. \
 Do NOT try to fetch any URLs. Use ONLY the text provided below.\n\n\
@@ -88,26 +145,25 @@ Do NOT try to fetch any URLs. Use ONLY the text provided below.\n\n\
 Summary (in {language}):"
         );
 
-        // Run in blocking context since claude CLI is synchronous
         let prompt_clone = prompt.clone();
-        let lang = language.clone();
+        let cli_type = self.cli_type;
+        let lang = self.language.clone();
+
         tokio::task::spawn_blocking(move || {
-            let provider = ClaudeCliProvider::new(&lang);
-            provider.run_claude(&prompt_clone)
+            let provider = CliProvider::new(cli_type, &lang);
+            provider.run_cli(&prompt_clone)
         })
         .await
         .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))?
     }
 
     async fn extract_tags(&self, content: &str) -> Result<Vec<String>> {
-        // Skip if content is too short
         let trimmed = content.trim();
         if trimmed.len() < 50 {
             return Ok(Vec::new());
         }
 
         let truncated = truncate_chars(content, 4000);
-        let language = self.language.clone();
 
         let prompt = format!(
             "Extract 3-5 topic tags from the article text below. \
@@ -118,10 +174,12 @@ Tags:"
         );
 
         let prompt_clone = prompt.clone();
-        let lang = language.clone();
+        let cli_type = self.cli_type;
+        let lang = self.language.clone();
+
         let result = tokio::task::spawn_blocking(move || {
-            let provider = ClaudeCliProvider::new(&lang);
-            provider.run_claude(&prompt_clone)
+            let provider = CliProvider::new(cli_type, &lang);
+            provider.run_cli(&prompt_clone)
         })
         .await
         .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
@@ -129,8 +187,8 @@ Tags:"
         let tags: Vec<String> = result
             .split(',')
             .map(|s| s.trim().to_lowercase())
-            .filter(|s| !s.is_empty() && s.len() < 50) // Filter out overly long "tags"
-            .take(5) // Limit to 5 tags
+            .filter(|s| !s.is_empty() && s.len() < 50)
+            .take(5)
             .collect();
 
         Ok(tags)
@@ -138,34 +196,31 @@ Tags:"
 
     async fn score_relevance(&self, content: &str, interests: &[String]) -> Result<f64> {
         if interests.is_empty() {
-            return Ok(0.5); // Neutral score if no interests defined
+            return Ok(0.5);
         }
 
         let truncated = truncate_chars(content, 3000);
-        let language = self.language.clone();
-
         let interests_str = interests.join(", ");
+
         let prompt = format!(
-            "Rate how relevant this article is to someone interested in: {}.\n\nArticle:\n{}\n\nRespond with only a number from 0 to 100, where 0 means not relevant at all and 100 means highly relevant.",
-            interests_str,
-            truncated
+            "Rate how relevant this article is to someone interested in: {}.\n\n\
+Article:\n{}\n\n\
+Respond with only a number from 0 to 100, where 0 means not relevant at all and 100 means highly relevant.",
+            interests_str, truncated
         );
 
         let prompt_clone = prompt.clone();
-        let lang = language.clone();
+        let cli_type = self.cli_type;
+        let lang = self.language.clone();
+
         let result = tokio::task::spawn_blocking(move || {
-            let provider = ClaudeCliProvider::new(&lang);
-            provider.run_claude(&prompt_clone)
+            let provider = CliProvider::new(cli_type, &lang);
+            provider.run_cli(&prompt_clone)
         })
         .await
         .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
 
-        // Parse the score
-        let score: f64 = result
-            .trim()
-            .parse()
-            .unwrap_or(50.0);
-
+        let score: f64 = result.trim().parse().unwrap_or(50.0);
         Ok(score / 100.0)
     }
 
@@ -174,7 +229,6 @@ Tags:"
             return Ok(Vec::new());
         }
 
-        // Filter out articles that are too short
         let min_len = self.min_content_length();
         let valid_articles: Vec<_> = articles
             .iter()
@@ -182,7 +236,6 @@ Tags:"
             .collect();
 
         if valid_articles.is_empty() {
-            // Return error results for all articles
             return Ok(articles
                 .into_iter()
                 .map(|a| BatchSummaryResult {
@@ -193,9 +246,7 @@ Tags:"
                 .collect());
         }
 
-        let language = self.language.clone();
-
-        // Build batch prompt with all articles
+        let language = &self.language;
         let mut prompt = format!(
             "Below are multiple articles. For EACH article, provide a 2-3 sentence summary in {language}.\n\
 Do NOT fetch any URLs. Use ONLY the text provided.\n\
@@ -215,17 +266,18 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
             "Now provide summaries in {language} using the format [ARTICLE_ID]: summary\n"
         ));
 
-        // Run Claude
         let prompt_clone = prompt;
-        let lang = language.clone();
+        let cli_type = self.cli_type;
+        let lang = self.language.clone();
+
         let result = tokio::task::spawn_blocking(move || {
-            let provider = ClaudeCliProvider::new(&lang);
-            provider.run_claude(&prompt_clone)
+            let provider = CliProvider::new(cli_type, &lang);
+            provider.run_cli(&prompt_clone)
         })
         .await
         .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
 
-        // Parse results - look for [ID]: summary pattern
+        // Parse results
         let mut summaries: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
         for line in result.lines() {
@@ -241,7 +293,6 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
             }
         }
 
-        // Build results for all original articles
         Ok(articles
             .into_iter()
             .map(|a| {
@@ -269,16 +320,10 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
     }
 
     fn batch_char_limit(&self) -> usize {
-        80000 // ~20K tokens for Claude
+        80000 // ~20K tokens
     }
 
     fn min_content_length(&self) -> usize {
         1000
-    }
-}
-
-impl Default for ClaudeCliProvider {
-    fn default() -> Self {
-        Self::new("English")
     }
 }

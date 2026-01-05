@@ -1,7 +1,5 @@
-use async_openai::{
-    types::{ChatCompletionRequestMessage, ChatCompletionRequestUserMessageArgs, CreateChatCompletionRequestArgs},
-    Client,
-};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
 
 use super::{AiProvider, ArticleForSummary, BatchSummaryResult};
 use crate::{Error, Result};
@@ -13,49 +11,114 @@ fn truncate_chars(input: &str, max_chars: usize) -> &str {
     }
 }
 
-/// OpenAI API provider
-pub struct OpenAiProvider {
-    client: Client<async_openai::config::OpenAIConfig>,
+#[derive(Serialize)]
+struct GeminiRequest {
+    contents: Vec<GeminiContent>,
+    #[serde(rename = "generationConfig")]
+    generation_config: GenerationConfig,
+}
+
+#[derive(Serialize)]
+struct GeminiContent {
+    parts: Vec<GeminiPart>,
+}
+
+#[derive(Serialize)]
+struct GeminiPart {
+    text: String,
+}
+
+#[derive(Serialize)]
+struct GenerationConfig {
+    #[serde(rename = "maxOutputTokens")]
+    max_output_tokens: u32,
+    temperature: f32,
+}
+
+#[derive(Deserialize)]
+struct GeminiResponse {
+    candidates: Option<Vec<GeminiCandidate>>,
+    error: Option<GeminiError>,
+}
+
+#[derive(Deserialize)]
+struct GeminiCandidate {
+    content: GeminiContentResponse,
+}
+
+#[derive(Deserialize)]
+struct GeminiContentResponse {
+    parts: Vec<GeminiPartResponse>,
+}
+
+#[derive(Deserialize)]
+struct GeminiPartResponse {
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct GeminiError {
+    message: String,
+}
+
+/// Gemini API provider
+pub struct GeminiApiProvider {
+    client: Client,
+    api_key: String,
     model: String,
     language: String,
 }
 
-impl OpenAiProvider {
+impl GeminiApiProvider {
     pub fn new(api_key: &str, model: &str, language: &str) -> Self {
-        let config = async_openai::config::OpenAIConfig::new().with_api_key(api_key);
-        let client = Client::with_config(config);
-
         Self {
-            client,
+            client: Client::new(),
+            api_key: api_key.to_string(),
             model: model.to_string(),
             language: language.to_string(),
         }
     }
 
-    async fn chat(&self, prompt: &str) -> Result<String> {
-        let request = CreateChatCompletionRequestArgs::default()
-            .model(&self.model)
-            .messages(vec![ChatCompletionRequestMessage::User(
-                ChatCompletionRequestUserMessageArgs::default()
-                    .content(prompt)
-                    .build()
-                    .map_err(|e| Error::AiProvider(e.to_string()))?,
-            )])
-            .max_tokens(200u32)
-            .build()
-            .map_err(|e| Error::AiProvider(e.to_string()))?;
+    async fn chat(&self, prompt: &str, max_tokens: u32) -> Result<String> {
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+            self.model, self.api_key
+        );
+
+        let request = GeminiRequest {
+            contents: vec![GeminiContent {
+                parts: vec![GeminiPart {
+                    text: prompt.to_string(),
+                }],
+            }],
+            generation_config: GenerationConfig {
+                max_output_tokens: max_tokens,
+                temperature: 0.7,
+            },
+        };
 
         let response = self
             .client
-            .chat()
-            .create(request)
+            .post(&url)
+            .json(&request)
+            .send()
             .await
-            .map_err(|e| Error::AiProvider(e.to_string()))?;
+            .map_err(|e| Error::AiProvider(format!("Gemini API request failed: {}", e)))?;
 
-        let content = response
-            .choices
-            .first()
-            .and_then(|c| c.message.content.clone())
+        let gemini_response: GeminiResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::AiProvider(format!("Failed to parse Gemini response: {}", e)))?;
+
+        if let Some(error) = gemini_response.error {
+            return Err(Error::AiProvider(format!("Gemini API error: {}", error.message)));
+        }
+
+        let content = gemini_response
+            .candidates
+            .and_then(|c| c.into_iter().next())
+            .and_then(|c| c.content.parts.into_iter().next())
+            .map(|p| p.text)
             .unwrap_or_default();
 
         Ok(content)
@@ -63,7 +126,7 @@ impl OpenAiProvider {
 }
 
 #[async_trait::async_trait]
-impl AiProvider for OpenAiProvider {
+impl AiProvider for GeminiApiProvider {
     fn language(&self) -> &str {
         &self.language
     }
@@ -81,26 +144,33 @@ impl AiProvider for OpenAiProvider {
         let language = &self.language;
 
         let prompt = format!(
-            "Summarize the following article in 2-3 sentences in {language}. Be concise and focus on the key points:\n\n{truncated}"
+            "Summarize the following article in 2-3 sentences in {language}. \
+Be concise and focus on the key points:\n\n{truncated}"
         );
 
-        self.chat(&prompt).await
+        self.chat(&prompt, 200).await
     }
 
     async fn extract_tags(&self, content: &str) -> Result<Vec<String>> {
+        let trimmed = content.trim();
+        if trimmed.len() < 50 {
+            return Ok(Vec::new());
+        }
+
         let truncated = truncate_chars(content, 4000);
 
         let prompt = format!(
-            "Extract 3-5 topic tags from the following article. Return only the tags as a comma-separated list, nothing else:\n\n{}",
-            truncated
+            "Extract 3-5 topic tags from the following article. \
+Return only the tags as a comma-separated list, nothing else:\n\n{truncated}"
         );
 
-        let result = self.chat(&prompt).await?;
+        let result = self.chat(&prompt, 100).await?;
 
         let tags: Vec<String> = result
             .split(',')
             .map(|s| s.trim().to_lowercase())
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty() && s.len() < 50)
+            .take(5)
             .collect();
 
         Ok(tags)
@@ -112,16 +182,16 @@ impl AiProvider for OpenAiProvider {
         }
 
         let truncated = truncate_chars(content, 3000);
-
         let interests_str = interests.join(", ");
+
         let prompt = format!(
-            "Rate how relevant this article is to someone interested in: {}.\n\nArticle:\n{}\n\nRespond with only a number from 0 to 100.",
-            interests_str,
-            truncated
+            "Rate how relevant this article is to someone interested in: {}.\n\n\
+Article:\n{}\n\n\
+Respond with only a number from 0 to 100.",
+            interests_str, truncated
         );
 
-        let result = self.chat(&prompt).await?;
-
+        let result = self.chat(&prompt, 10).await?;
         let score: f64 = result.trim().parse().unwrap_or(50.0);
         Ok(score / 100.0)
     }
@@ -148,12 +218,11 @@ impl AiProvider for OpenAiProvider {
                 .collect());
         }
 
-        // Build batch prompt
         let language = &self.language;
         let mut prompt = format!(
             "Below are multiple articles. For EACH article, provide a 2-3 sentence summary in {language}.\n\
-            Format your response EXACTLY as follows, with each summary on its own line:\n\
-            [ARTICLE_ID]: summary text here\n\n"
+Format your response EXACTLY as follows, with each summary on its own line:\n\
+[ARTICLE_ID]: summary text here\n\n"
         );
 
         for article in &valid_articles {
@@ -168,10 +237,11 @@ impl AiProvider for OpenAiProvider {
             "Now provide summaries in {language} using the format [ARTICLE_ID]: summary\n"
         ));
 
-        let result = self.chat(&prompt).await?;
+        let result = self.chat(&prompt, 2000).await?;
 
         // Parse results
         let mut summaries: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
         for line in result.lines() {
             let line = line.trim();
             if line.starts_with('[') {
@@ -212,7 +282,7 @@ impl AiProvider for OpenAiProvider {
     }
 
     fn batch_char_limit(&self) -> usize {
-        100000 // ~25K tokens for GPT-4
+        100000 // ~25K tokens for Gemini
     }
 
     fn min_content_length(&self) -> usize {

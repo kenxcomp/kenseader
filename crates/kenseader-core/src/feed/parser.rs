@@ -8,22 +8,25 @@ use crate::{Error, Result};
 /// Simple regex-like pattern matching for extracting image URLs from HTML
 fn extract_first_image_url(html: &str) -> Option<String> {
     // Look for <img src="..."> patterns
-    let html_lower = html.to_lowercase();
+    let html_bytes = html.as_bytes();
+    let html_lower: Vec<u8> = html_bytes.iter().map(|b| b.to_ascii_lowercase()).collect();
 
     // Find img tag
-    if let Some(img_start) = html_lower.find("<img") {
-        let remaining = &html[img_start..];
+    if let Some(img_start) = find_subslice(&html_lower, b"<img") {
+        let remaining = &html_bytes[img_start..];
+        let remaining_lower = &html_lower[img_start..];
 
         // Find src attribute
-        if let Some(src_start) = remaining.to_lowercase().find("src=") {
+        if let Some(src_start) = find_subslice(remaining_lower, b"src=") {
             let src_remaining = &remaining[src_start + 4..];
 
             // Handle both src="url" and src='url'
-            let quote_char = src_remaining.chars().next()?;
-            if quote_char == '"' || quote_char == '\'' {
+            let quote_char = *src_remaining.first()?;
+            if quote_char == b'"' || quote_char == b'\'' {
                 let url_start = 1;
-                if let Some(url_end) = src_remaining[url_start..].find(quote_char) {
-                    let url = &src_remaining[url_start..url_start + url_end];
+                let url_bytes = &src_remaining[url_start..];
+                if let Some(url_end) = url_bytes.iter().position(|b| *b == quote_char) {
+                    let url = std::str::from_utf8(&url_bytes[..url_end]).ok()?;
                     // Filter out small images (likely icons/tracking pixels)
                     if !url.contains("1x1") && !url.contains("pixel") && !url.contains("tracking") {
                         return Some(url.to_string());
@@ -35,6 +38,12 @@ fn extract_first_image_url(html: &str) -> Option<String> {
 
     // Also check for media:content or enclosure in feed entries (handled separately)
     None
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 /// Parsed feed data from RSS/Atom content
