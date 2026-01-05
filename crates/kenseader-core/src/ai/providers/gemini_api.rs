@@ -1,5 +1,6 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 use super::{AiProvider, ArticleForSummary, BatchSummaryResult};
 use crate::{Error, Result};
@@ -10,6 +11,8 @@ fn truncate_chars(input: &str, max_chars: usize) -> &str {
         None => input,
     }
 }
+
+const AI_REQUEST_TIMEOUT_SECS: u64 = 30;
 
 #[derive(Serialize)]
 struct GeminiRequest {
@@ -67,15 +70,22 @@ pub struct GeminiApiProvider {
     api_key: String,
     model: String,
     language: String,
+    summary_max_tokens: u32,
 }
 
 impl GeminiApiProvider {
-    pub fn new(api_key: &str, model: &str, language: &str) -> Self {
+    pub fn new(api_key: &str, model: &str, language: &str, summary_max_tokens: u32) -> Self {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(AI_REQUEST_TIMEOUT_SECS))
+            .build()
+            .expect("Failed to build Gemini HTTP client");
+
         Self {
-            client: Client::new(),
+            client,
             api_key: api_key.to_string(),
             model: model.to_string(),
             language: language.to_string(),
+            summary_max_tokens,
         }
     }
 
@@ -148,7 +158,7 @@ impl AiProvider for GeminiApiProvider {
 Be concise and focus on the key points:\n\n{truncated}"
         );
 
-        self.chat(&prompt, 200).await
+        self.chat(&prompt, self.summary_max_tokens).await
     }
 
     async fn extract_tags(&self, content: &str) -> Result<Vec<String>> {

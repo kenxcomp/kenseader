@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use tokio::task::JoinSet;
+
 use crate::ai::Summarizer;
 use crate::config::AppConfig;
-use crate::feed::FeedFetcher;
+use crate::feed::{Article, FeedFetcher};
 use crate::storage::{ArticleRepository, Database, FeedRepository};
 use crate::Result;
 
@@ -66,26 +68,58 @@ pub async fn summarize_pending_articles(
     let article_repo = ArticleRepository::new(db);
     let articles = article_repo.list_unsummarized(limit).await?;
 
+    let concurrency = summarizer.concurrency();
     let mut summarized = 0;
+    let mut join_set: JoinSet<std::result::Result<bool, crate::Error>> = JoinSet::new();
+    let mut iter = articles.into_iter();
 
-    for article in articles {
-        if let Some(content) = &article.content_text {
-            match summarizer.summarize(content).await {
-                Ok(summary) => {
-                    article_repo.update_summary(article.id, &summary).await?;
+    fn spawn_task(
+        join_set: &mut JoinSet<std::result::Result<bool, crate::Error>>,
+        summarizer: Arc<Summarizer>,
+        db: Database,
+        article: Article,
+    ) {
+        join_set.spawn(async move {
+            let article_repo = ArticleRepository::new(&db);
+            if let Some(content) = &article.content_text {
+                match summarizer.summarize(content).await {
+                    Ok(summary) => {
+                        article_repo.update_summary(article.id, &summary).await?;
 
-                    // Also extract and add tags
-                    if let Ok(tags) = summarizer.extract_tags(content).await {
-                        article_repo.add_tags(article.id, &tags, "ai").await?;
+                        if let Ok(tags) = summarizer.extract_tags(content).await {
+                            article_repo.add_tags(article.id, &tags, "ai").await?;
+                        }
+
+                        tracing::debug!("Summarized article: {}", article.title);
+                        Ok::<bool, crate::Error>(true)
                     }
-
-                    summarized += 1;
-                    tracing::debug!("Summarized article: {}", article.title);
+                    Err(e) => {
+                        tracing::warn!("Failed to summarize '{}': {}", article.title, e);
+                        Ok::<bool, crate::Error>(false)
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!("Failed to summarize '{}': {}", article.title, e);
-                }
+            } else {
+                Ok::<bool, crate::Error>(false)
             }
+        });
+    }
+
+    for _ in 0..concurrency {
+        if let Some(article) = iter.next() {
+            spawn_task(&mut join_set, Arc::clone(&summarizer), (*db).clone(), article);
+        }
+    }
+
+    while let Some(result) = join_set.join_next().await {
+        let completed = result
+            .map_err(|e| crate::Error::AiProvider(format!("Task join error: {}", e)))??;
+
+        if completed {
+            summarized += 1;
+        }
+
+        if let Some(article) = iter.next() {
+            spawn_task(&mut join_set, Arc::clone(&summarizer), (*db).clone(), article);
         }
     }
 
