@@ -6,7 +6,8 @@ A high-performance terminal RSS reader with AI-powered summarization and rich co
 
 - **Terminal UI** - Beautiful TUI built with [ratatui](https://github.com/ratatui/ratatui)
 - **Vim-Style Navigation** - Full vim keybindings for efficient navigation
-- **AI Summarization** - Automatic article summaries via Claude CLI or OpenAI
+- **AI Summarization** - Automatic article summaries via multiple AI providers (Claude, Gemini, OpenAI, Codex)
+- **Background Scheduler** - Automatic feed refresh, article cleanup, and AI summarization in the background
 - **Inline Image Display** - Images displayed at their original positions within article content
 - **Rich Content Rendering** - Styled headings, quotes, code blocks, and lists
 - **Protocol Auto-Detection** - Automatically selects best image protocol (Sixel/Kitty/iTerm2/Halfblocks)
@@ -81,6 +82,9 @@ kenseader run
 | `list` | List all subscriptions |
 | `refresh` | Refresh all feeds |
 | `cleanup` | Clean up old articles |
+| `daemon start` | Start background daemon for auto-refresh and summarization |
+| `daemon stop` | Stop the background daemon |
+| `daemon status` | Check if daemon is running |
 
 ## Keyboard Shortcuts (TUI)
 
@@ -139,9 +143,21 @@ log_level = "info"
 
 [ai]
 enabled = true
-provider = "claude_cli"  # or "openai"
-# openai_api_key = "sk-..."  # Required for OpenAI
-# openai_model = "gpt-4o-mini"
+# Provider options: claude_cli, gemini_cli, codex_cli, openai, gemini_api, claude_api
+provider = "claude_cli"
+# Summary language (e.g., "English", "Chinese", "Japanese")
+summary_language = "English"
+
+# API keys (only needed for API-based providers)
+# openai_api_key = "sk-..."
+# gemini_api_key = "AIza..."
+# claude_api_key = "sk-ant-..."
+
+# Model names
+openai_model = "gpt-4o-mini"
+gemini_model = "gemini-2.0-flash"
+claude_model = "claude-sonnet-4-20250514"
+
 max_summary_tokens = 150
 concurrency = 2
 
@@ -152,7 +168,9 @@ show_timestamps = true
 image_preview = true
 
 [sync]
-refresh_interval_secs = 300
+refresh_interval_secs = 300   # Auto-refresh interval (0 = disabled)
+cleanup_interval_secs = 3600  # Old article cleanup interval
+summarize_interval_secs = 60  # AI summarization interval
 request_timeout_secs = 30
 rate_limit_ms = 1000
 
@@ -213,20 +231,71 @@ Article content is parsed and rendered with formatting:
 
 ## AI Providers
 
-### Claude CLI (Default)
+Kenseader supports multiple AI providers for article summarization. Choose between CLI-based providers (free, uses local CLI tools) or API-based providers (requires API key).
 
-Uses the Claude CLI for summarization. Requires [Claude CLI](https://github.com/anthropics/claude-cli) to be installed and authenticated.
+### CLI-Based Providers
 
-### OpenAI
+CLI providers use locally installed AI CLI tools. They don't require API keys but need the respective CLI to be installed and authenticated.
 
-Set `provider = "openai"` and provide your API key:
+| Provider | CLI Command | Installation |
+|----------|-------------|--------------|
+| `claude_cli` (Default) | `claude` | [Claude CLI](https://github.com/anthropics/claude-cli) |
+| `gemini_cli` | `gemini` | [Gemini CLI](https://github.com/google/gemini-cli) |
+| `codex_cli` | `codex` | [Codex CLI](https://github.com/openai/codex-cli) |
 
 ```toml
 [ai]
+provider = "claude_cli"  # or "gemini_cli" or "codex_cli"
+summary_language = "Chinese"  # Summaries in Chinese
+```
+
+### API-Based Providers
+
+API providers connect directly to AI services. They require an API key but offer more control and reliability.
+
+| Provider | API Service | Model Examples |
+|----------|-------------|----------------|
+| `openai` | OpenAI API | gpt-4o, gpt-4o-mini |
+| `gemini_api` | Google Gemini API | gemini-2.0-flash, gemini-1.5-pro |
+| `claude_api` | Anthropic Claude API | claude-sonnet-4-20250514, claude-3-haiku |
+
+```toml
+[ai]
+# OpenAI
 provider = "openai"
 openai_api_key = "sk-your-key-here"
 openai_model = "gpt-4o-mini"
+
+# Or Gemini API
+provider = "gemini_api"
+gemini_api_key = "AIza-your-key-here"
+gemini_model = "gemini-2.0-flash"
+
+# Or Claude API
+provider = "claude_api"
+claude_api_key = "sk-ant-your-key-here"
+claude_model = "claude-sonnet-4-20250514"
 ```
+
+### Summary Language
+
+Configure the language for AI-generated summaries:
+
+```toml
+[ai]
+summary_language = "English"   # Default
+# summary_language = "Chinese"
+# summary_language = "Japanese"
+# summary_language = "Spanish"
+# summary_language = "French"
+```
+
+### Batch Summarization
+
+The background daemon uses batch summarization to process multiple articles in a single AI request, reducing API costs and improving efficiency.
+
+- **Minimum Content Length**: Articles must have at least 1000 characters to be summarized
+- **Batch Size Limits**: ~80,000 chars for Claude, ~100,000 chars for OpenAI/Gemini
 
 ## RSSHub Protocol
 
@@ -265,6 +334,49 @@ kenseader/
 - **Async I/O** - Non-blocking network and database operations
 - **Memory Management** - Image cache limited to 20 images
 - **Disk Cache** - Images cached at `~/.cache/kenseader/image_cache/`
+
+## Background Daemon
+
+Kenseader includes a background daemon that runs independently of the TUI to keep your feeds up-to-date.
+
+### Starting the Daemon
+
+```bash
+# Start the background daemon
+kenseader daemon start
+
+# Check if daemon is running
+kenseader daemon status
+
+# Stop the daemon
+kenseader daemon stop
+```
+
+### Scheduled Tasks
+
+| Task | Default Interval | Description |
+|------|------------------|-------------|
+| **Feed Refresh** | 5 minutes | Fetches new articles from all subscribed feeds |
+| **Article Cleanup** | 1 hour | Removes articles older than retention period |
+| **AI Summarization** | 1 minute | Generates summaries for new articles |
+
+### How It Works
+
+1. **Independent Process** - Daemon runs separately from TUI, continues after TUI quits
+2. **Graceful Shutdown** - Use `daemon stop` or Ctrl+C to stop cleanly
+3. **PID File** - Tracks running daemon at `~/.local/share/kenseader/daemon.pid`
+4. **Configurable Intervals** - Customize all intervals in the config file
+
+### Configuration
+
+```toml
+[sync]
+refresh_interval_secs = 300   # Feed refresh (0 = disabled)
+cleanup_interval_secs = 3600  # Article cleanup
+summarize_interval_secs = 60  # AI summarization
+```
+
+Set `refresh_interval_secs = 0` to disable the background scheduler entirely.
 
 ## Troubleshooting
 

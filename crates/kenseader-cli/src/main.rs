@@ -48,6 +48,21 @@ enum Commands {
     Refresh,
     /// Clean up old articles
     Cleanup,
+    /// Background daemon for automatic feed refresh and summarization
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Start the background daemon
+    Start,
+    /// Stop the background daemon
+    Stop,
+    /// Check daemon status
+    Status,
 }
 
 #[tokio::main]
@@ -92,6 +107,13 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Cleanup) => {
             commands::cleanup::run(&db, &config).await
+        }
+        Some(Commands::Daemon { action }) => {
+            match action {
+                DaemonAction::Start => commands::daemon::start(db, config).await,
+                DaemonAction::Stop => commands::daemon::stop().await,
+                DaemonAction::Status => commands::daemon::status().await,
+            }
         }
     }
 }
