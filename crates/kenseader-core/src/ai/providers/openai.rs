@@ -18,10 +18,11 @@ pub struct OpenAiProvider {
     client: Client<async_openai::config::OpenAIConfig>,
     model: String,
     language: String,
+    summary_max_tokens: u32,
 }
 
 impl OpenAiProvider {
-    pub fn new(api_key: &str, model: &str, language: &str) -> Self {
+    pub fn new(api_key: &str, model: &str, language: &str, summary_max_tokens: u32) -> Self {
         let config = async_openai::config::OpenAIConfig::new().with_api_key(api_key);
         let client = Client::with_config(config);
 
@@ -29,10 +30,11 @@ impl OpenAiProvider {
             client,
             model: model.to_string(),
             language: language.to_string(),
+            summary_max_tokens,
         }
     }
 
-    async fn chat(&self, prompt: &str) -> Result<String> {
+    async fn chat(&self, prompt: &str, max_tokens: u32) -> Result<String> {
         let request = CreateChatCompletionRequestArgs::default()
             .model(&self.model)
             .messages(vec![ChatCompletionRequestMessage::User(
@@ -41,7 +43,7 @@ impl OpenAiProvider {
                     .build()
                     .map_err(|e| Error::AiProvider(e.to_string()))?,
             )])
-            .max_tokens(200u32)
+            .max_tokens(max_tokens)
             .build()
             .map_err(|e| Error::AiProvider(e.to_string()))?;
 
@@ -84,7 +86,7 @@ impl AiProvider for OpenAiProvider {
             "Summarize the following article in 2-3 sentences in {language}. Be concise and focus on the key points:\n\n{truncated}"
         );
 
-        self.chat(&prompt).await
+        self.chat(&prompt, self.summary_max_tokens).await
     }
 
     async fn extract_tags(&self, content: &str) -> Result<Vec<String>> {
@@ -95,7 +97,7 @@ impl AiProvider for OpenAiProvider {
             truncated
         );
 
-        let result = self.chat(&prompt).await?;
+        let result = self.chat(&prompt, 100).await?;
 
         let tags: Vec<String> = result
             .split(',')
@@ -120,7 +122,7 @@ impl AiProvider for OpenAiProvider {
             truncated
         );
 
-        let result = self.chat(&prompt).await?;
+        let result = self.chat(&prompt, 10).await?;
 
         let score: f64 = result.trim().parse().unwrap_or(50.0);
         Ok(score / 100.0)
@@ -168,7 +170,7 @@ impl AiProvider for OpenAiProvider {
             "Now provide summaries in {language} using the format [ARTICLE_ID]: summary\n"
         ));
 
-        let result = self.chat(&prompt).await?;
+        let result = self.chat(&prompt, 200).await?;
 
         // Parse results
         let mut summaries: std::collections::HashMap<String, String> = std::collections::HashMap::new();

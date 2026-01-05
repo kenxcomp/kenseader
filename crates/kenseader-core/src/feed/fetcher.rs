@@ -8,6 +8,7 @@ use crate::config::AppConfig;
 use crate::{Error, Result};
 
 const RSSHUB_SCHEME: &str = "rsshub";
+const MAX_FEED_BYTES: usize = 5 * 1024 * 1024;
 
 /// Feed fetcher with HTTP client and RSSHub support
 pub struct FeedFetcher {
@@ -64,6 +65,7 @@ impl FeedFetcher {
             .send()
             .await?;
 
+        self.ensure_response_size(&response, &resolved_url)?;
         let status = response.status();
         if !status.is_success() {
             return Err(Error::FeedParse(format!(
@@ -74,6 +76,13 @@ impl FeedFetcher {
         }
 
         let content = response.bytes().await?;
+        if content.len() > MAX_FEED_BYTES {
+            return Err(Error::FeedParse(format!(
+                "Feed too large ({} bytes) for URL: {}",
+                content.len(),
+                resolved_url
+            )));
+        }
         parse_feed(&content, feed_id)
     }
 
@@ -86,6 +95,7 @@ impl FeedFetcher {
             .send()
             .await?;
 
+        self.ensure_response_size(&response, &resolved_url)?;
         let status = response.status();
         if !status.is_success() {
             return Err(Error::FeedParse(format!(
@@ -95,7 +105,29 @@ impl FeedFetcher {
             )));
         }
 
-        Ok(response.bytes().await?.to_vec())
+        let bytes = response.bytes().await?;
+        if bytes.len() > MAX_FEED_BYTES {
+            return Err(Error::FeedParse(format!(
+                "Feed too large ({} bytes) for URL: {}",
+                bytes.len(),
+                resolved_url
+            )));
+        }
+
+        Ok(bytes.to_vec())
+    }
+
+    fn ensure_response_size(&self, response: &reqwest::Response, url: &str) -> Result<()> {
+        if let Some(len) = response.content_length() {
+            if len as usize > MAX_FEED_BYTES {
+                return Err(Error::FeedParse(format!(
+                    "Feed too large ({} bytes) for URL: {}",
+                    len,
+                    url
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
