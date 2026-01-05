@@ -55,15 +55,30 @@ pub struct AiConfig {
     /// Enable AI summarization
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// AI provider: "claude_cli" or "openai"
+    /// AI provider: "claude_cli", "gemini_cli", "codex_cli", "openai", "gemini_api", "claude_api"
     #[serde(default = "default_ai_provider")]
     pub provider: String,
+    /// Summary language (e.g., "English", "Chinese", "Japanese")
+    #[serde(default = "default_summary_language")]
+    pub summary_language: String,
     /// OpenAI API key (for openai provider)
     #[serde(default)]
     pub openai_api_key: Option<String>,
     /// OpenAI model name
     #[serde(default = "default_openai_model")]
     pub openai_model: String,
+    /// Gemini API key (for gemini_api provider)
+    #[serde(default)]
+    pub gemini_api_key: Option<String>,
+    /// Gemini model name
+    #[serde(default = "default_gemini_model")]
+    pub gemini_model: String,
+    /// Claude/Anthropic API key (for claude_api provider)
+    #[serde(default)]
+    pub claude_api_key: Option<String>,
+    /// Claude model name
+    #[serde(default = "default_claude_model")]
+    pub claude_model: String,
     /// Max tokens for summary
     #[serde(default = "default_max_tokens")]
     pub max_summary_tokens: u32,
@@ -77,8 +92,13 @@ impl Default for AiConfig {
         Self {
             enabled: default_true(),
             provider: default_ai_provider(),
+            summary_language: default_summary_language(),
             openai_api_key: None,
             openai_model: default_openai_model(),
+            gemini_api_key: None,
+            gemini_model: default_gemini_model(),
+            claude_api_key: None,
+            claude_model: default_claude_model(),
             max_summary_tokens: default_max_tokens(),
             concurrency: default_concurrency(),
         }
@@ -117,6 +137,12 @@ pub struct SyncConfig {
     /// Auto-refresh interval in seconds (0 = disabled)
     #[serde(default = "default_refresh_interval")]
     pub refresh_interval_secs: u64,
+    /// Cleanup interval in seconds (remove old articles)
+    #[serde(default = "default_cleanup_interval")]
+    pub cleanup_interval_secs: u64,
+    /// Summarization interval in seconds (AI processing)
+    #[serde(default = "default_summarize_interval")]
+    pub summarize_interval_secs: u64,
     /// Request timeout in seconds
     #[serde(default = "default_timeout")]
     pub request_timeout_secs: u64,
@@ -129,6 +155,8 @@ impl Default for SyncConfig {
     fn default() -> Self {
         Self {
             refresh_interval_secs: default_refresh_interval(),
+            cleanup_interval_secs: default_cleanup_interval(),
+            summarize_interval_secs: default_summarize_interval(),
             request_timeout_secs: default_timeout(),
             rate_limit_ms: default_rate_limit(),
         }
@@ -172,8 +200,20 @@ fn default_ai_provider() -> String {
     "claude_cli".to_string()
 }
 
+fn default_summary_language() -> String {
+    "English".to_string()
+}
+
 fn default_openai_model() -> String {
     "gpt-4o-mini".to_string()
+}
+
+fn default_gemini_model() -> String {
+    "gemini-2.0-flash".to_string()
+}
+
+fn default_claude_model() -> String {
+    "claude-sonnet-4-20250514".to_string()
 }
 
 fn default_max_tokens() -> u32 {
@@ -190,6 +230,14 @@ fn default_tick_rate() -> u64 {
 
 fn default_refresh_interval() -> u64 {
     300 // 5 minutes
+}
+
+fn default_cleanup_interval() -> u64 {
+    3600 // 1 hour
+}
+
+fn default_summarize_interval() -> u64 {
+    60 // 1 minute
 }
 
 fn default_timeout() -> u64 {

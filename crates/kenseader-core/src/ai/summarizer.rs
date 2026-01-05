@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
-use super::providers::{AiProvider, ClaudeCliProvider, OpenAiProvider};
+use super::providers::{
+    AiProvider, ClaudeApiProvider, ClaudeCliProvider, CliProvider, CliType,
+    GeminiApiProvider, OpenAiProvider,
+};
+pub use super::providers::{ArticleForSummary, BatchSummaryResult};
 use crate::config::AppConfig;
 use crate::Result;
 
@@ -12,14 +16,34 @@ pub struct Summarizer {
 impl Summarizer {
     /// Create a new summarizer based on configuration
     pub fn new(config: &AppConfig) -> Result<Self> {
+        let language = &config.ai.summary_language;
+
         let provider: Arc<dyn AiProvider> = match config.ai.provider.as_str() {
+            // API-based providers
             "openai" => {
                 let api_key = config.ai.openai_api_key.as_ref()
                     .ok_or_else(|| crate::Error::Config("OpenAI API key not configured".to_string()))?;
-                Arc::new(OpenAiProvider::new(api_key, &config.ai.openai_model))
+                Arc::new(OpenAiProvider::new(api_key, &config.ai.openai_model, language))
+            }
+            "gemini_api" => {
+                let api_key = config.ai.gemini_api_key.as_ref()
+                    .ok_or_else(|| crate::Error::Config("Gemini API key not configured".to_string()))?;
+                Arc::new(GeminiApiProvider::new(api_key, &config.ai.gemini_model, language))
+            }
+            "claude_api" => {
+                let api_key = config.ai.claude_api_key.as_ref()
+                    .ok_or_else(|| crate::Error::Config("Claude API key not configured".to_string()))?;
+                Arc::new(ClaudeApiProvider::new(api_key, &config.ai.claude_model, language))
+            }
+            // CLI-based providers
+            "gemini_cli" => {
+                Arc::new(CliProvider::new(CliType::Gemini, language))
+            }
+            "codex_cli" => {
+                Arc::new(CliProvider::new(CliType::Codex, language))
             }
             "claude_cli" | _ => {
-                Arc::new(ClaudeCliProvider::new())
+                Arc::new(ClaudeCliProvider::new(language))
             }
         };
 
@@ -39,5 +63,20 @@ impl Summarizer {
     /// Score article relevance to user interests
     pub async fn score_relevance(&self, content: &str, interests: &[String]) -> Result<f64> {
         self.provider.score_relevance(content, interests).await
+    }
+
+    /// Batch summarize multiple articles in one API call
+    pub async fn batch_summarize(&self, articles: Vec<ArticleForSummary>) -> Result<Vec<BatchSummaryResult>> {
+        self.provider.batch_summarize(articles).await
+    }
+
+    /// Get the character limit for batch processing
+    pub fn batch_char_limit(&self) -> usize {
+        self.provider.batch_char_limit()
+    }
+
+    /// Get minimum content length for summarization
+    pub fn min_content_length(&self) -> usize {
+        self.provider.min_content_length()
     }
 }

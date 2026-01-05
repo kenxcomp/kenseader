@@ -14,14 +14,31 @@ log_level = "info"
 # Enable AI summarization
 enabled = true
 
-# AI provider: "claude_cli" or "openai"
-provider = "claude_cli"
+# AI provider options:
+#   CLI-based (requires CLI tool installed):
+#     - "claude_cli"  : Uses Claude CLI (claude command)
+#     - "gemini_cli"  : Uses Gemini CLI (gemini command)
+#     - "codex_cli"   : Uses Codex CLI (codex command)
+#   API-based (requires API key):
+#     - "openai"      : OpenAI API (GPT models)
+#     - "gemini_api"  : Google Gemini API
+#     - "claude_api"  : Anthropic Claude API
+provider = "codex_cli"
 
-# OpenAI API key (required if provider = "openai")
+# Summary language (e.g., "English", "Chinese", "Japanese", "Spanish", etc.)
+summary_language = "Chinese"
+
+# OpenAI API settings (required if provider = "openai")
 # openai_api_key = "sk-..."
-
-# OpenAI model name
 openai_model = "gpt-4o-mini"
+
+# Gemini API settings (required if provider = "gemini_api")
+# gemini_api_key = "AIza..."
+gemini_model = "gemini-2.0-flash"
+
+# Claude/Anthropic API settings (required if provider = "claude_api")
+# claude_api_key = "sk-ant-..."
+claude_model = "claude-sonnet-4-20250514"
 
 # Max tokens for summary
 max_summary_tokens = 150
@@ -45,6 +62,12 @@ image_preview = true
 [sync]
 # Auto-refresh interval in seconds (0 = disabled)
 refresh_interval_secs = 300
+
+# Cleanup interval in seconds (remove old articles)
+cleanup_interval_secs = 3600
+
+# AI summarization interval in seconds
+summarize_interval_secs = 60
 
 # HTTP request timeout in seconds
 request_timeout_secs = 30
