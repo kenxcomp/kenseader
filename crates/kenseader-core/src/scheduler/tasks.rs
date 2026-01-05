@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::ai::{ArticleForSummary, Summarizer};
 use crate::config::AppConfig;
-use crate::feed::FeedFetcher;
+use crate::feed::{Article, FeedFetcher};
 use crate::storage::{ArticleRepository, Database, FeedRepository};
 use crate::Result;
 
@@ -111,7 +111,6 @@ pub async fn summarize_pending_articles(
         articles.len(),
         batches.len()
     );
-
     let mut summarized = 0;
 
     for (batch_idx, batch) in batches.into_iter().enumerate() {

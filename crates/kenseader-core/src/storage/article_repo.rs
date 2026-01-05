@@ -93,6 +93,33 @@ impl<'a> ArticleRepository<'a> {
         if result.rows_affected() > 0 {
             self.find_by_id(id).await
         } else {
+            sqlx::query(
+                r#"
+                UPDATE articles
+                SET url = COALESCE(?, url),
+                    title = ?,
+                    author = COALESCE(?, author),
+                    content = COALESCE(?, content),
+                    content_text = COALESCE(?, content_text),
+                    published_at = COALESCE(?, published_at),
+                    fetched_at = ?,
+                    image_url = COALESCE(?, image_url)
+                WHERE feed_id = ? AND guid = ?
+                "#,
+            )
+            .bind(&new_article.url)
+            .bind(&new_article.title)
+            .bind(&new_article.author)
+            .bind(&new_article.content)
+            .bind(&new_article.content_text)
+            .bind(new_article.published_at)
+            .bind(now)
+            .bind(&new_article.image_url)
+            .bind(new_article.feed_id.to_string())
+            .bind(&new_article.guid)
+            .execute(self.db.pool())
+            .await?;
+
             // Article already exists
             Ok(None)
         }

@@ -78,10 +78,22 @@ impl Article {
             .or(self.summary.as_deref())
             .unwrap_or("");
 
+        if max_len == 0 {
+            return String::new();
+        }
+
         if text.len() <= max_len {
             text.to_string()
         } else {
-            format!("{}...", &text[..max_len])
+            let mut end = 0;
+            for (idx, ch) in text.char_indices() {
+                let next = idx + ch.len_utf8();
+                if next > max_len {
+                    break;
+                }
+                end = next;
+            }
+            format!("{}...", &text[..end])
         }
     }
 }
