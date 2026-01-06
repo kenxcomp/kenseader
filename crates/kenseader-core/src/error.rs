@@ -20,6 +20,9 @@ pub enum Error {
     #[error("URL parsing error: {0}")]
     UrlParse(#[from] url::ParseError),
 
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+
     #[error("AI provider error: {0}")]
     AiProvider(String),
 
@@ -31,6 +34,9 @@ pub enum Error {
 
     #[error("Invalid RSSHub URL: {0}")]
     InvalidRsshubUrl(String),
+
+    #[error("{0}")]
+    Other(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

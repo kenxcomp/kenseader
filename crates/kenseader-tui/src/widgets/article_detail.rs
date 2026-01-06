@@ -310,6 +310,28 @@ impl ArticleDetailWidget {
             lines.push(Line::from(""));
         }
 
+        // Summary (if available)
+        if let Some(summary) = &article.summary {
+            lines.push(Line::from(Span::styled(
+                "Summary:",
+                Style::default()
+                    .fg(GruvboxMaterial::AQUA)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for line in summary.lines() {
+                lines.push(Line::from(Span::styled(
+                    line.to_string(),
+                    Style::default().fg(GruvboxMaterial::FG0),
+                )));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "────────────────────────────────────────",
+                Style::default().fg(GruvboxMaterial::GREY0),
+            )));
+            lines.push(Line::from(""));
+        }
+
         // Content
         if let Some(content_text) = &article.content_text {
             for line in content_text.lines() {

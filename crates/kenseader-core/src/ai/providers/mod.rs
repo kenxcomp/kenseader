@@ -28,6 +28,21 @@ pub struct BatchSummaryResult {
     pub error: Option<String>,
 }
 
+/// Article info for batch scoring
+#[derive(Debug, Clone)]
+pub struct ArticleForScoring {
+    pub id: String,
+    pub content: String, // title + summary or title + content
+}
+
+/// Result of batch scoring
+#[derive(Debug, Clone)]
+pub struct BatchScoreResult {
+    pub id: String,
+    pub score: Option<f64>,
+    pub error: Option<String>,
+}
+
 /// Trait for AI summarization providers
 #[async_trait::async_trait]
 pub trait AiProvider: Send + Sync {
@@ -48,6 +63,14 @@ pub trait AiProvider: Send + Sync {
     /// Batch summarize multiple articles in one API call
     /// Returns a vector of results matching the input order
     async fn batch_summarize(&self, articles: Vec<ArticleForSummary>) -> Result<Vec<BatchSummaryResult>>;
+
+    /// Batch score multiple articles for relevance in one API call
+    /// Returns a vector of results matching the input order
+    async fn batch_score_relevance(
+        &self,
+        articles: Vec<ArticleForScoring>,
+        interests: &[String],
+    ) -> Result<Vec<BatchScoreResult>>;
 
     /// Get the maximum token/character limit for batch processing
     fn batch_char_limit(&self) -> usize {

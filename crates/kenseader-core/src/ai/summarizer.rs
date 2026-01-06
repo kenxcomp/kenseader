@@ -4,36 +4,39 @@ use super::providers::{
     AiProvider, ClaudeApiProvider, ClaudeCliProvider, CliProvider, CliType,
     GeminiApiProvider, OpenAiProvider,
 };
-pub use super::providers::{ArticleForSummary, BatchSummaryResult};
+pub use super::providers::{ArticleForScoring, ArticleForSummary, BatchScoreResult, BatchSummaryResult};
 use crate::config::AppConfig;
 use crate::Result;
 
 /// AI Summarizer that wraps the configured provider
 pub struct Summarizer {
     provider: Arc<dyn AiProvider>,
+    concurrency: usize,
 }
 
 impl Summarizer {
     /// Create a new summarizer based on configuration
     pub fn new(config: &AppConfig) -> Result<Self> {
         let language = &config.ai.summary_language;
+        let summary_max_tokens = config.ai.max_summary_tokens.max(1);
+        let concurrency = config.ai.concurrency.max(1);
 
         let provider: Arc<dyn AiProvider> = match config.ai.provider.as_str() {
             // API-based providers
             "openai" => {
                 let api_key = config.ai.openai_api_key.as_ref()
                     .ok_or_else(|| crate::Error::Config("OpenAI API key not configured".to_string()))?;
-                Arc::new(OpenAiProvider::new(api_key, &config.ai.openai_model, language))
+                Arc::new(OpenAiProvider::new(api_key, &config.ai.openai_model, language, summary_max_tokens))
             }
             "gemini_api" => {
                 let api_key = config.ai.gemini_api_key.as_ref()
                     .ok_or_else(|| crate::Error::Config("Gemini API key not configured".to_string()))?;
-                Arc::new(GeminiApiProvider::new(api_key, &config.ai.gemini_model, language))
+                Arc::new(GeminiApiProvider::new(api_key, &config.ai.gemini_model, language, summary_max_tokens))
             }
             "claude_api" => {
                 let api_key = config.ai.claude_api_key.as_ref()
                     .ok_or_else(|| crate::Error::Config("Claude API key not configured".to_string()))?;
-                Arc::new(ClaudeApiProvider::new(api_key, &config.ai.claude_model, language))
+                Arc::new(ClaudeApiProvider::new(api_key, &config.ai.claude_model, language, summary_max_tokens))
             }
             // CLI-based providers
             "gemini_cli" => {
@@ -47,7 +50,7 @@ impl Summarizer {
             }
         };
 
-        Ok(Self { provider })
+        Ok(Self { provider, concurrency })
     }
 
     /// Generate a summary for article content
@@ -70,6 +73,15 @@ impl Summarizer {
         self.provider.batch_summarize(articles).await
     }
 
+    /// Batch score multiple articles for relevance in one API call
+    pub async fn batch_score_relevance(
+        &self,
+        articles: Vec<ArticleForScoring>,
+        interests: &[String],
+    ) -> Result<Vec<BatchScoreResult>> {
+        self.provider.batch_score_relevance(articles, interests).await
+    }
+
     /// Get the character limit for batch processing
     pub fn batch_char_limit(&self) -> usize {
         self.provider.batch_char_limit()
@@ -78,5 +90,10 @@ impl Summarizer {
     /// Get minimum content length for summarization
     pub fn min_content_length(&self) -> usize {
         self.provider.min_content_length()
+    }
+
+    /// Get max concurrent summarization tasks
+    pub fn concurrency(&self) -> usize {
+        self.concurrency
     }
 }

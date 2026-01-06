@@ -3,7 +3,7 @@ use async_openai::{
     Client,
 };
 
-use super::{AiProvider, ArticleForSummary, BatchSummaryResult};
+use super::{AiProvider, ArticleForScoring, ArticleForSummary, BatchScoreResult, BatchSummaryResult};
 use crate::{Error, Result};
 
 fn truncate_chars(input: &str, max_chars: usize) -> &str {
@@ -18,10 +18,11 @@ pub struct OpenAiProvider {
     client: Client<async_openai::config::OpenAIConfig>,
     model: String,
     language: String,
+    summary_max_tokens: u32,
 }
 
 impl OpenAiProvider {
-    pub fn new(api_key: &str, model: &str, language: &str) -> Self {
+    pub fn new(api_key: &str, model: &str, language: &str, summary_max_tokens: u32) -> Self {
         let config = async_openai::config::OpenAIConfig::new().with_api_key(api_key);
         let client = Client::with_config(config);
 
@@ -29,10 +30,11 @@ impl OpenAiProvider {
             client,
             model: model.to_string(),
             language: language.to_string(),
+            summary_max_tokens,
         }
     }
 
-    async fn chat(&self, prompt: &str) -> Result<String> {
+    async fn chat(&self, prompt: &str, max_tokens: u32) -> Result<String> {
         let request = CreateChatCompletionRequestArgs::default()
             .model(&self.model)
             .messages(vec![ChatCompletionRequestMessage::User(
@@ -41,7 +43,7 @@ impl OpenAiProvider {
                     .build()
                     .map_err(|e| Error::AiProvider(e.to_string()))?,
             )])
-            .max_tokens(200u32)
+            .max_tokens(max_tokens)
             .build()
             .map_err(|e| Error::AiProvider(e.to_string()))?;
 
@@ -84,7 +86,7 @@ impl AiProvider for OpenAiProvider {
             "Summarize the following article in 2-3 sentences in {language}. Be concise and focus on the key points:\n\n{truncated}"
         );
 
-        self.chat(&prompt).await
+        self.chat(&prompt, self.summary_max_tokens).await
     }
 
     async fn extract_tags(&self, content: &str) -> Result<Vec<String>> {
@@ -95,7 +97,7 @@ impl AiProvider for OpenAiProvider {
             truncated
         );
 
-        let result = self.chat(&prompt).await?;
+        let result = self.chat(&prompt, 100).await?;
 
         let tags: Vec<String> = result
             .split(',')
@@ -120,7 +122,7 @@ impl AiProvider for OpenAiProvider {
             truncated
         );
 
-        let result = self.chat(&prompt).await?;
+        let result = self.chat(&prompt, 10).await?;
 
         let score: f64 = result.trim().parse().unwrap_or(50.0);
         Ok(score / 100.0)
@@ -168,7 +170,7 @@ impl AiProvider for OpenAiProvider {
             "Now provide summaries in {language} using the format [ARTICLE_ID]: summary\n"
         ));
 
-        let result = self.chat(&prompt).await?;
+        let result = self.chat(&prompt, 200).await?;
 
         // Parse results
         let mut summaries: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -205,6 +207,81 @@ impl AiProvider for OpenAiProvider {
                         id: a.id,
                         summary: None,
                         error: Some("Summary not found in response".to_string()),
+                    }
+                }
+            })
+            .collect())
+    }
+
+    async fn batch_score_relevance(
+        &self,
+        articles: Vec<ArticleForScoring>,
+        interests: &[String],
+    ) -> Result<Vec<BatchScoreResult>> {
+        if articles.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if interests.is_empty() {
+            return Ok(articles
+                .into_iter()
+                .map(|a| BatchScoreResult {
+                    id: a.id,
+                    score: Some(0.5),
+                    error: None,
+                })
+                .collect());
+        }
+
+        let interests_str = interests.join(", ");
+        let mut prompt = format!(
+            "Rate how relevant each article is to someone interested in: {interests_str}.\n\
+            For EACH article, respond with a score from 0 to 100.\n\
+            Format your response EXACTLY as follows, one per line:\n\
+            [ARTICLE_ID]: score\n\n"
+        );
+
+        for article in &articles {
+            let truncated = truncate_chars(&article.content, 1000);
+            prompt.push_str(&format!(
+                "---ARTICLE [{}]---\n{}\n\n",
+                article.id, truncated
+            ));
+        }
+
+        prompt.push_str("Now provide scores using the format [ARTICLE_ID]: score\n");
+
+        let result = self.chat(&prompt, 200).await?;
+
+        let mut scores: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+
+        for line in result.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                if let Some(end_bracket) = line.find("]:") {
+                    let id = &line[1..end_bracket];
+                    let score_str = line[end_bracket + 2..].trim();
+                    if let Ok(score) = score_str.parse::<f64>() {
+                        scores.insert(id.to_string(), score / 100.0);
+                    }
+                }
+            }
+        }
+
+        Ok(articles
+            .into_iter()
+            .map(|a| {
+                if let Some(&score) = scores.get(&a.id) {
+                    BatchScoreResult {
+                        id: a.id,
+                        score: Some(score),
+                        error: None,
+                    }
+                } else {
+                    BatchScoreResult {
+                        id: a.id,
+                        score: None,
+                        error: Some("Score not found in response".to_string()),
                     }
                 }
             })

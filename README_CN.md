@@ -6,7 +6,9 @@
 
 - **终端界面** - 基于 [ratatui](https://github.com/ratatui/ratatui) 构建的精美 TUI
 - **Vim 风格导航** - 完整的 vim 快捷键支持，高效浏览
-- **AI 摘要** - 通过 Claude CLI 或 OpenAI 自动生成文章摘要
+- **AI 摘要** - 通过多种 AI 提供商自动生成文章摘要（Claude、Gemini、OpenAI、Codex）
+- **智能文章过滤** - 基于用户兴趣的 AI 相关性评分，自动过滤低相关性文章
+- **后台调度器** - 自动刷新订阅源、清理旧文章、生成 AI 摘要、智能过滤
 - **嵌入式图片显示** - 图片在文章正文的原始位置显示
 - **富文本渲染** - 支持标题、引用、代码块、列表等样式化显示
 - **协议自动检测** - 自动选择最佳图片协议（Sixel/Kitty/iTerm2/半块字符）
@@ -52,23 +54,51 @@ cargo build --release
 - SQLite（通过 sqlx 内置）
 - 支持真彩色的终端（图片显示必需）
 
+## 架构
+
+Kenseader 采用**客户端-服务器架构**，TUI 和守护进程作为独立进程运行：
+
+```
+┌─────────────────┐         Unix Socket         ┌─────────────────────┐
+│  kenseader run  │  ◄────────────────────────► │  kenseader daemon   │
+│   (纯前端 TUI)   │      JSON-RPC 协议          │   (后端服务)         │
+└─────────────────┘                             └─────────────────────┘
+                                                         │
+                                                         ▼
+                                                ┌─────────────────────┐
+                                                │      SQLite DB      │
+                                                └─────────────────────┘
+```
+
+- **守护进程** (`kenseader daemon start`)：处理所有后端操作 - 订阅源刷新、文章清理、AI 摘要、数据库访问
+- **TUI** (`kenseader run`)：纯前端，通过 IPC 与守护进程通信
+- **IPC Socket**：`~/.local/share/kenseader/kenseader.sock`（Unix socket）
+
 ## 使用方法
 
 ### 快速开始
 
 ```bash
-# 订阅一个 RSS 源
+# 1. 订阅 RSS 源（不需要守护进程）
 kenseader subscribe --url https://hnrss.org/frontpage --name "Hacker News"
-
-# 或使用简写
 kenseader -s https://blog.rust-lang.org/feed.xml -n "Rust 博客"
 
-# 刷新订阅源
-kenseader refresh
+# 2. 启动守护进程（运行 TUI 前必须启动）
+kenseader daemon start
 
-# 启动终端界面
+# 3. 启动终端界面
 kenseader run
+
+# 4. 完成后停止守护进程
+kenseader daemon stop
 ```
+
+> **重要**：TUI 需要守护进程在运行中。如果没有先启动守护进程就运行 `kenseader run`，你会看到：
+> ```
+> Daemon is not running.
+> Please start the daemon first with:
+>   kenseader daemon start
+> ```
 
 ### 命令列表
 
@@ -80,6 +110,9 @@ kenseader run
 | `list` | 列出所有订阅 |
 | `refresh` | 刷新所有订阅源 |
 | `cleanup` | 清理旧文章 |
+| `daemon start` | 启动后台守护进程（自动刷新和摘要） |
+| `daemon stop` | 停止后台守护进程 |
+| `daemon status` | 检查守护进程状态 |
 
 ## 快捷键（TUI）
 
@@ -129,7 +162,14 @@ kenseader run
 
 ## 配置
 
-配置文件位置：`~/.config/kenseader/config.toml`
+配置文件位置：`~/.config/kenseader/config.toml`（所有平台通用）
+
+> **注意**：项目目录中的 `config/default.toml` 只是模板文件。应用程序从 `~/.config/kenseader/config.toml` 读取配置。如果配置文件不存在，将使用默认值。要自定义设置，请将模板复制到正确位置：
+>
+> ```bash
+> mkdir -p ~/.config/kenseader
+> cp config/default.toml ~/.config/kenseader/config.toml
+> ```
 
 ```toml
 [general]
@@ -138,11 +178,28 @@ log_level = "info"          # 日志级别
 
 [ai]
 enabled = true              # 启用 AI 摘要
-provider = "claude_cli"     # 或 "openai"
-# openai_api_key = "sk-..."  # OpenAI 必填
-# openai_model = "gpt-4o-mini"
+# 提供商选项: claude_cli, gemini_cli, codex_cli, openai, gemini_api, claude_api
+provider = "claude_cli"
+# 摘要语言（如 "English", "Chinese", "Japanese"）
+summary_language = "Chinese"
+
+# API 密钥（仅 API 提供商需要）
+# openai_api_key = "sk-..."
+# gemini_api_key = "AIza..."
+# claude_api_key = "sk-ant-..."
+
+# 模型名称
+openai_model = "gpt-4o-mini"
+gemini_model = "gemini-2.0-flash"
+claude_model = "claude-sonnet-4-20250514"
+
 max_summary_tokens = 150    # 摘要最大 token 数
 concurrency = 2             # 并发摘要任务数
+
+# 文章过滤设置
+min_summarize_length = 500    # AI 摘要的最小字符数
+max_summary_length = 150      # 摘要最大输出长度
+relevance_threshold = 0.3     # 低于此分数的文章将被自动过滤（0.0-1.0）
 
 [ui]
 tick_rate_ms = 100          # 刷新率（毫秒）
@@ -151,9 +208,12 @@ show_timestamps = true      # 显示时间戳
 image_preview = true        # 图片预览
 
 [sync]
-refresh_interval_secs = 300 # 自动刷新间隔（秒）
-request_timeout_secs = 30   # 请求超时（秒）
-rate_limit_ms = 1000        # 请求频率限制（毫秒）
+refresh_interval_secs = 300   # 自动刷新间隔（秒），0 = 禁用
+cleanup_interval_secs = 3600  # 旧文章清理间隔（秒）
+summarize_interval_secs = 60  # AI 摘要生成间隔（秒）
+filter_interval_secs = 120    # 文章过滤间隔（秒）
+request_timeout_secs = 30     # 请求超时（秒）
+rate_limit_ms = 1000          # 请求频率限制（毫秒）
 
 [rsshub]
 base_url = "https://rsshub.app"  # RSSHub 服务地址
@@ -212,20 +272,70 @@ image_preview = true  # 设为 false 完全禁用图片
 
 ## AI 提供商
 
-### Claude CLI（默认）
+Kenseader 支持多种 AI 提供商进行文章摘要。可选择 CLI 提供商（免费，使用本地 CLI 工具）或 API 提供商（需要 API 密钥）。
 
-使用 Claude CLI 进行摘要。需要安装并认证 [Claude CLI](https://github.com/anthropics/claude-cli)。
+### CLI 提供商
 
-### OpenAI
+CLI 提供商使用本地安装的 AI CLI 工具。不需要 API 密钥，但需要安装并认证相应的 CLI。
 
-设置 `provider = "openai"` 并提供 API 密钥：
+| 提供商 | CLI 命令 | 安装链接 |
+|--------|----------|----------|
+| `claude_cli`（默认） | `claude` | [Claude CLI](https://github.com/anthropics/claude-cli) |
+| `gemini_cli` | `gemini` | [Gemini CLI](https://github.com/google/gemini-cli) |
+| `codex_cli` | `codex` | [Codex CLI](https://github.com/openai/codex-cli) |
 
 ```toml
 [ai]
+provider = "claude_cli"  # 或 "gemini_cli" 或 "codex_cli"
+summary_language = "Chinese"  # 中文摘要
+```
+
+### API 提供商
+
+API 提供商直接连接 AI 服务。需要 API 密钥，但提供更好的控制和可靠性。
+
+| 提供商 | API 服务 | 模型示例 |
+|--------|----------|----------|
+| `openai` | OpenAI API | gpt-4o, gpt-4o-mini |
+| `gemini_api` | Google Gemini API | gemini-2.0-flash, gemini-1.5-pro |
+| `claude_api` | Anthropic Claude API | claude-sonnet-4-20250514, claude-3-haiku |
+
+```toml
+[ai]
+# OpenAI
 provider = "openai"
 openai_api_key = "sk-your-key-here"
 openai_model = "gpt-4o-mini"
+
+# 或 Gemini API
+provider = "gemini_api"
+gemini_api_key = "AIza-your-key-here"
+gemini_model = "gemini-2.0-flash"
+
+# 或 Claude API
+provider = "claude_api"
+claude_api_key = "sk-ant-your-key-here"
+claude_model = "claude-sonnet-4-20250514"
 ```
+
+### 摘要语言
+
+配置 AI 生成摘要的语言：
+
+```toml
+[ai]
+summary_language = "Chinese"  # 中文（推荐中文用户使用）
+# summary_language = "English"   # 英文
+# summary_language = "Japanese"  # 日文
+# summary_language = "Spanish"   # 西班牙文
+```
+
+### 批量摘要
+
+后台守护进程使用批量摘要功能，在单个 AI 请求中处理多篇文章，降低 API 成本并提高效率。
+
+- **最小内容长度**：文章至少需要 1000 个字符才会生成摘要
+- **批量大小限制**：Claude 约 80,000 字符，OpenAI/Gemini 约 100,000 字符
 
 ## RSSHub 协议
 
@@ -264,6 +374,196 @@ kenseader/
 - **异步 I/O** - 非阻塞的网络和数据库操作
 - **内存管理** - 图片缓存限制为 20 张
 - **磁盘缓存** - 图片缓存于 `~/.cache/kenseader/image_cache/`
+
+## 后台守护进程
+
+守护进程是**核心后端服务**，处理所有数据操作。TUI 是纯前端，通过 Unix socket IPC 与守护进程通信。
+
+### 启动守护进程
+
+```bash
+# 启动后台守护进程
+kenseader daemon start
+
+# 检查守护进程状态
+kenseader daemon status
+
+# 停止守护进程
+kenseader daemon stop
+```
+
+### 守护进程输出
+
+启动守护进程后，你会看到：
+```
+Starting kenseader daemon...
+Daemon started (PID: 12345). Press Ctrl+C or run 'kenseader daemon stop' to stop.
+  Refresh interval: 300 seconds
+  Cleanup interval: 3600 seconds
+  Summarize interval: 60 seconds
+  IPC socket: /Users/you/.local/share/kenseader/kenseader.sock
+```
+
+### 定时任务
+
+| 任务 | 默认间隔 | 描述 |
+|------|----------|------|
+| **订阅源刷新** | 5 分钟 | 从所有订阅源获取新文章 |
+| **旧文章清理** | 1 小时 | 删除超过保留期限的文章 |
+| **AI 摘要生成** | 1 分钟 | 为新文章生成摘要 |
+| **文章过滤** | 2 分钟 | 评估文章相关性并自动过滤低相关性文章 |
+
+### IPC API
+
+守护进程通过 Unix socket 暴露以下操作：
+
+| 方法 | 描述 |
+|------|------|
+| `ping` | 健康检查 |
+| `status` | 获取守护进程状态和运行时间 |
+| `feed.list` | 获取所有订阅源及未读数 |
+| `feed.add` | 添加新订阅源 |
+| `feed.delete` | 删除订阅源 |
+| `feed.refresh` | 触发订阅源刷新 |
+| `article.list` | 获取文章列表（支持过滤） |
+| `article.get` | 通过 ID 获取单篇文章 |
+| `article.mark_read` | 标记文章为已读 |
+| `article.mark_unread` | 标记文章为未读 |
+| `article.toggle_saved` | 切换收藏/书签状态 |
+| `article.search` | 搜索文章 |
+
+### 工作原理
+
+1. **TUI 必需** - 启动 TUI 前必须先运行守护进程
+2. **独立进程** - 守护进程与 TUI 分离运行，退出 TUI 后继续运行
+3. **优雅退出** - 使用 `daemon stop` 或 Ctrl+C 正常停止
+4. **PID 文件** - 守护进程 PID 保存在 `~/.local/share/kenseader/daemon.pid`
+5. **IPC Socket** - Unix socket 位于 `~/.local/share/kenseader/kenseader.sock`
+6. **可配置间隔** - 所有间隔都可在配置文件中自定义
+
+### 配置选项
+
+```toml
+[sync]
+refresh_interval_secs = 300   # 订阅源刷新间隔（0 = 禁用）
+cleanup_interval_secs = 3600  # 旧文章清理间隔
+summarize_interval_secs = 60  # AI 摘要生成间隔
+filter_interval_secs = 120    # 文章过滤间隔
+```
+
+设置 `refresh_interval_secs = 0` 可完全禁用后台调度器。
+
+## 开发
+
+### 开发环境运行
+
+```bash
+# 克隆并编译
+git clone https://github.com/kenxcomp/kenseader.git
+cd kenseader
+cargo build
+
+# 终端 1：启动守护进程并开启调试日志
+RUST_LOG=debug ./target/debug/kenseader daemon start
+
+# 终端 2：运行 TUI
+./target/debug/kenseader run
+```
+
+### 生产环境运行
+
+```bash
+# 编译发布版本
+cargo build --release
+
+# 启动守护进程（可在后台运行或作为服务）
+./target/release/kenseader daemon start &
+
+# 运行 TUI
+./target/release/kenseader run
+
+# 完成后停止守护进程
+./target/release/kenseader daemon stop
+```
+
+### 查看日志
+
+```bash
+# 以指定日志级别运行
+RUST_LOG=info ./target/release/kenseader daemon start
+
+# 可用级别：error, warn, info, debug, trace
+RUST_LOG=debug ./target/release/kenseader daemon start
+
+# 重定向日志到文件
+RUST_LOG=info ./target/release/kenseader daemon start 2> /tmp/kenseader.log
+```
+
+### 测试 IPC 连接
+
+可以用简单的 Python 脚本测试 IPC 连接：
+
+```python
+import socket
+import json
+import uuid
+
+socket_path = "~/.local/share/kenseader/kenseader.sock"
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect(socket_path)
+
+# 发送 ping 请求
+request = {"id": str(uuid.uuid4()), "method": "ping", "params": None}
+sock.sendall((json.dumps(request) + "\n").encode())
+print(sock.recv(4096).decode())  # {"id":"...","result":{"ok":true}}
+```
+
+## 智能文章过滤
+
+Kenseader 包含 AI 驱动的文章过滤功能，根据您的阅读兴趣自动评估文章相关性并过滤低相关性内容。
+
+### 工作原理
+
+1. **兴趣学习** - 系统追踪您的阅读行为（点击、收藏、阅读完成）来学习您的兴趣标签偏好
+2. **AI 评分** - 文章通过以下两种方式综合评分：
+   - **用户画像评分（40%）** - 基于标签与您学习到的兴趣的匹配度
+   - **AI 评分（60%）** - AI 评估文章与您兴趣的相关性
+3. **自动过滤** - 低于相关性阈值的文章会被自动标记为已读（不会删除）
+
+### 工作流程
+
+过滤过程分两个阶段进行：
+
+**阶段 1：摘要生成**
+- 500 字符以上的文章会生成 AI 摘要
+- 较短的文章跳过摘要生成
+
+**阶段 2：评分与过滤**
+- 有摘要的文章使用「标题 + 摘要」进行评分
+- 短文章（< 500 字符）使用「标题 + 正文」进行评分
+- 评分低于阈值（默认 0.3）的文章会被自动过滤
+
+### 配置选项
+
+```toml
+[ai]
+# AI 摘要的最小内容长度（字符）
+min_summarize_length = 500
+
+# 相关性阈值（0.0 - 1.0）
+# 低于此分数的文章会被自动标记为已读
+relevance_threshold = 0.3
+
+[sync]
+# 文章过滤运行间隔（秒）
+filter_interval_secs = 120
+```
+
+### 使用建议
+
+- **较高阈值**（0.5+）= 更激进的过滤，只显示高度相关的文章
+- **较低阈值**（0.2）= 更宽松的过滤，显示大部分文章
+- 被过滤的文章只是标记为已读，并非删除 - 按 `i` 键切换未读模式即可查看
 
 ## 常见问题
 

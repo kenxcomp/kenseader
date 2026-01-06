@@ -85,6 +85,15 @@ pub struct AiConfig {
     /// Concurrent summarization tasks
     #[serde(default = "default_concurrency")]
     pub concurrency: usize,
+    /// Minimum content length (chars) for AI summarization
+    #[serde(default = "default_min_summarize_length")]
+    pub min_summarize_length: usize,
+    /// Maximum summary output length (chars)
+    #[serde(default = "default_max_summary_length")]
+    pub max_summary_length: usize,
+    /// Relevance threshold for article filtering (0.0-1.0)
+    #[serde(default = "default_relevance_threshold")]
+    pub relevance_threshold: f64,
 }
 
 impl Default for AiConfig {
@@ -101,6 +110,9 @@ impl Default for AiConfig {
             claude_model: default_claude_model(),
             max_summary_tokens: default_max_tokens(),
             concurrency: default_concurrency(),
+            min_summarize_length: default_min_summarize_length(),
+            max_summary_length: default_max_summary_length(),
+            relevance_threshold: default_relevance_threshold(),
         }
     }
 }
@@ -143,6 +155,9 @@ pub struct SyncConfig {
     /// Summarization interval in seconds (AI processing)
     #[serde(default = "default_summarize_interval")]
     pub summarize_interval_secs: u64,
+    /// Article filtering interval in seconds
+    #[serde(default = "default_filter_interval")]
+    pub filter_interval_secs: u64,
     /// Request timeout in seconds
     #[serde(default = "default_timeout")]
     pub request_timeout_secs: u64,
@@ -157,6 +172,7 @@ impl Default for SyncConfig {
             refresh_interval_secs: default_refresh_interval(),
             cleanup_interval_secs: default_cleanup_interval(),
             summarize_interval_secs: default_summarize_interval(),
+            filter_interval_secs: default_filter_interval(),
             request_timeout_secs: default_timeout(),
             rate_limit_ms: default_rate_limit(),
         }
@@ -224,6 +240,18 @@ fn default_concurrency() -> usize {
     2
 }
 
+fn default_min_summarize_length() -> usize {
+    500 // Only summarize articles >= 500 chars
+}
+
+fn default_max_summary_length() -> usize {
+    150 // Summary output max 150 chars
+}
+
+fn default_relevance_threshold() -> f64 {
+    0.3 // Articles below this score are auto-marked as read
+}
+
 fn default_tick_rate() -> u64 {
     100
 }
@@ -238,6 +266,10 @@ fn default_cleanup_interval() -> u64 {
 
 fn default_summarize_interval() -> u64 {
     60 // 1 minute
+}
+
+fn default_filter_interval() -> u64 {
+    120 // 2 minutes
 }
 
 fn default_timeout() -> u64 {
@@ -282,9 +314,11 @@ impl AppConfig {
     }
 
     /// Get the configuration file path
+    /// Always uses ~/.config/kenseader/config.toml on all platforms
     pub fn config_path() -> PathBuf {
-        dirs::config_dir()
+        dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
+            .join(".config")
             .join("kenseader")
             .join("config.toml")
     }
@@ -292,5 +326,15 @@ impl AppConfig {
     /// Get the database file path
     pub fn database_path(&self) -> PathBuf {
         self.general.data_dir.join("kenseader.db")
+    }
+
+    /// Get the Unix socket path for IPC
+    pub fn socket_path(&self) -> PathBuf {
+        self.general.data_dir.join("kenseader.sock")
+    }
+
+    /// Get the data directory
+    pub fn data_dir(&self) -> &PathBuf {
+        &self.general.data_dir
     }
 }

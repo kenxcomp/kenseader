@@ -46,6 +46,17 @@ max_summary_tokens = 150
 # Concurrent summarization tasks
 concurrency = 2
 
+# Minimum content length (chars) for AI summarization
+# Articles shorter than this will not be summarized
+min_summarize_length = 500
+
+# Maximum summary output length (chars)
+max_summary_length = 150
+
+# Relevance threshold for article filtering (0.0-1.0)
+# Articles below this score are auto-marked as read
+relevance_threshold = 0.3
+
 [ui]
 # UI tick rate in milliseconds
 tick_rate_ms = 100
@@ -68,6 +79,9 @@ cleanup_interval_secs = 3600
 
 # AI summarization interval in seconds
 summarize_interval_secs = 60
+
+# Article filtering interval in seconds
+filter_interval_secs = 120
 
 # HTTP request timeout in seconds
 request_timeout_secs = 30

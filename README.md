@@ -6,7 +6,9 @@ A high-performance terminal RSS reader with AI-powered summarization and rich co
 
 - **Terminal UI** - Beautiful TUI built with [ratatui](https://github.com/ratatui/ratatui)
 - **Vim-Style Navigation** - Full vim keybindings for efficient navigation
-- **AI Summarization** - Automatic article summaries via Claude CLI or OpenAI
+- **AI Summarization** - Automatic article summaries via multiple AI providers (Claude, Gemini, OpenAI, Codex)
+- **Smart Article Filtering** - AI-powered relevance scoring based on user interests, auto-filters low-relevance articles
+- **Background Scheduler** - Automatic feed refresh, article cleanup, AI summarization, and filtering in the background
 - **Inline Image Display** - Images displayed at their original positions within article content
 - **Rich Content Rendering** - Styled headings, quotes, code blocks, and lists
 - **Protocol Auto-Detection** - Automatically selects best image protocol (Sixel/Kitty/iTerm2/Halfblocks)
@@ -53,23 +55,51 @@ cargo build --release
 - SQLite (bundled via sqlx)
 - Terminal with true color support (required for image display)
 
+## Architecture
+
+Kenseader uses a **client-server architecture** with the TUI and daemon running as separate processes:
+
+```
+┌─────────────────┐         Unix Socket         ┌─────────────────────┐
+│  kenseader run  │  ◄────────────────────────► │  kenseader daemon   │
+│   (Pure TUI)    │      JSON-RPC Protocol      │   (Backend Service) │
+└─────────────────┘                             └─────────────────────┘
+                                                         │
+                                                         ▼
+                                                ┌─────────────────────┐
+                                                │      SQLite DB      │
+                                                └─────────────────────┘
+```
+
+- **Daemon** (`kenseader daemon start`): Handles all backend operations - feed refresh, article cleanup, AI summarization, database access
+- **TUI** (`kenseader run`): Pure frontend that communicates with daemon via IPC
+- **IPC Socket**: `~/.local/share/kenseader/kenseader.sock` (Unix socket)
+
 ## Usage
 
 ### Quick Start
 
 ```bash
-# Subscribe to a feed
+# 1. Subscribe to feeds (can be done without daemon)
 kenseader subscribe --url https://hnrss.org/frontpage --name "Hacker News"
-
-# Or use shorthand
 kenseader -s https://blog.rust-lang.org/feed.xml -n "Rust Blog"
 
-# Refresh feeds
-kenseader refresh
+# 2. Start the daemon (REQUIRED before running TUI)
+kenseader daemon start
 
-# Launch the TUI
+# 3. Launch the TUI
 kenseader run
+
+# 4. When done, stop the daemon
+kenseader daemon stop
 ```
+
+> **Important**: The TUI requires the daemon to be running. If you try to run `kenseader run` without starting the daemon first, you'll see:
+> ```
+> Daemon is not running.
+> Please start the daemon first with:
+>   kenseader daemon start
+> ```
 
 ### Commands
 
@@ -81,6 +111,9 @@ kenseader run
 | `list` | List all subscriptions |
 | `refresh` | Refresh all feeds |
 | `cleanup` | Clean up old articles |
+| `daemon start` | Start background daemon for auto-refresh and summarization |
+| `daemon stop` | Stop the background daemon |
+| `daemon status` | Check if daemon is running |
 
 ## Keyboard Shortcuts (TUI)
 
@@ -130,7 +163,14 @@ kenseader run
 
 ## Configuration
 
-Configuration file location: `~/.config/kenseader/config.toml`
+Configuration file location: `~/.config/kenseader/config.toml` (same on all platforms)
+
+> **Note**: The `config/default.toml` file in the project directory is just a template. The application reads configuration from `~/.config/kenseader/config.toml`. If the config file doesn't exist, default values are used. To customize settings, copy the template to the correct location:
+>
+> ```bash
+> mkdir -p ~/.config/kenseader
+> cp config/default.toml ~/.config/kenseader/config.toml
+> ```
 
 ```toml
 [general]
@@ -139,11 +179,28 @@ log_level = "info"
 
 [ai]
 enabled = true
-provider = "claude_cli"  # or "openai"
-# openai_api_key = "sk-..."  # Required for OpenAI
-# openai_model = "gpt-4o-mini"
+# Provider options: claude_cli, gemini_cli, codex_cli, openai, gemini_api, claude_api
+provider = "claude_cli"
+# Summary language (e.g., "English", "Chinese", "Japanese")
+summary_language = "English"
+
+# API keys (only needed for API-based providers)
+# openai_api_key = "sk-..."
+# gemini_api_key = "AIza..."
+# claude_api_key = "sk-ant-..."
+
+# Model names
+openai_model = "gpt-4o-mini"
+gemini_model = "gemini-2.0-flash"
+claude_model = "claude-sonnet-4-20250514"
+
 max_summary_tokens = 150
 concurrency = 2
+
+# Article filtering settings
+min_summarize_length = 500    # Minimum chars for AI summarization
+max_summary_length = 150      # Maximum summary output length
+relevance_threshold = 0.3     # Articles below this score are auto-filtered (0.0-1.0)
 
 [ui]
 tick_rate_ms = 100
@@ -152,7 +209,10 @@ show_timestamps = true
 image_preview = true
 
 [sync]
-refresh_interval_secs = 300
+refresh_interval_secs = 300   # Auto-refresh interval (0 = disabled)
+cleanup_interval_secs = 3600  # Old article cleanup interval
+summarize_interval_secs = 60  # AI summarization interval
+filter_interval_secs = 120    # Article filtering interval
 request_timeout_secs = 30
 rate_limit_ms = 1000
 
@@ -213,20 +273,71 @@ Article content is parsed and rendered with formatting:
 
 ## AI Providers
 
-### Claude CLI (Default)
+Kenseader supports multiple AI providers for article summarization. Choose between CLI-based providers (free, uses local CLI tools) or API-based providers (requires API key).
 
-Uses the Claude CLI for summarization. Requires [Claude CLI](https://github.com/anthropics/claude-cli) to be installed and authenticated.
+### CLI-Based Providers
 
-### OpenAI
+CLI providers use locally installed AI CLI tools. They don't require API keys but need the respective CLI to be installed and authenticated.
 
-Set `provider = "openai"` and provide your API key:
+| Provider | CLI Command | Installation |
+|----------|-------------|--------------|
+| `claude_cli` (Default) | `claude` | [Claude CLI](https://github.com/anthropics/claude-cli) |
+| `gemini_cli` | `gemini` | [Gemini CLI](https://github.com/google/gemini-cli) |
+| `codex_cli` | `codex` | [Codex CLI](https://github.com/openai/codex-cli) |
 
 ```toml
 [ai]
+provider = "claude_cli"  # or "gemini_cli" or "codex_cli"
+summary_language = "Chinese"  # Summaries in Chinese
+```
+
+### API-Based Providers
+
+API providers connect directly to AI services. They require an API key but offer more control and reliability.
+
+| Provider | API Service | Model Examples |
+|----------|-------------|----------------|
+| `openai` | OpenAI API | gpt-4o, gpt-4o-mini |
+| `gemini_api` | Google Gemini API | gemini-2.0-flash, gemini-1.5-pro |
+| `claude_api` | Anthropic Claude API | claude-sonnet-4-20250514, claude-3-haiku |
+
+```toml
+[ai]
+# OpenAI
 provider = "openai"
 openai_api_key = "sk-your-key-here"
 openai_model = "gpt-4o-mini"
+
+# Or Gemini API
+provider = "gemini_api"
+gemini_api_key = "AIza-your-key-here"
+gemini_model = "gemini-2.0-flash"
+
+# Or Claude API
+provider = "claude_api"
+claude_api_key = "sk-ant-your-key-here"
+claude_model = "claude-sonnet-4-20250514"
 ```
+
+### Summary Language
+
+Configure the language for AI-generated summaries:
+
+```toml
+[ai]
+summary_language = "English"   # Default
+# summary_language = "Chinese"
+# summary_language = "Japanese"
+# summary_language = "Spanish"
+# summary_language = "French"
+```
+
+### Batch Summarization
+
+The background daemon uses batch summarization to process multiple articles in a single AI request, reducing API costs and improving efficiency.
+
+- **Minimum Content Length**: Articles must have at least 1000 characters to be summarized
+- **Batch Size Limits**: ~80,000 chars for Claude, ~100,000 chars for OpenAI/Gemini
 
 ## RSSHub Protocol
 
@@ -265,6 +376,196 @@ kenseader/
 - **Async I/O** - Non-blocking network and database operations
 - **Memory Management** - Image cache limited to 20 images
 - **Disk Cache** - Images cached at `~/.cache/kenseader/image_cache/`
+
+## Background Daemon
+
+The daemon is the **core backend service** that handles all data operations. The TUI is a pure frontend that communicates with the daemon via Unix socket IPC.
+
+### Starting the Daemon
+
+```bash
+# Start the background daemon
+kenseader daemon start
+
+# Check if daemon is running
+kenseader daemon status
+
+# Stop the daemon
+kenseader daemon stop
+```
+
+### Daemon Output
+
+When the daemon starts, you'll see:
+```
+Starting kenseader daemon...
+Daemon started (PID: 12345). Press Ctrl+C or run 'kenseader daemon stop' to stop.
+  Refresh interval: 300 seconds
+  Cleanup interval: 3600 seconds
+  Summarize interval: 60 seconds
+  IPC socket: /Users/you/.local/share/kenseader/kenseader.sock
+```
+
+### Scheduled Tasks
+
+| Task | Default Interval | Description |
+|------|------------------|-------------|
+| **Feed Refresh** | 5 minutes | Fetches new articles from all subscribed feeds |
+| **Article Cleanup** | 1 hour | Removes articles older than retention period |
+| **AI Summarization** | 1 minute | Generates summaries for new articles |
+| **Article Filtering** | 2 minutes | Scores articles by relevance and auto-filters low-relevance ones |
+
+### IPC API
+
+The daemon exposes these operations via Unix socket:
+
+| Method | Description |
+|--------|-------------|
+| `ping` | Health check |
+| `status` | Get daemon status and uptime |
+| `feed.list` | List all feeds with unread counts |
+| `feed.add` | Add a new feed subscription |
+| `feed.delete` | Delete a feed |
+| `feed.refresh` | Trigger feed refresh |
+| `article.list` | List articles (with filters) |
+| `article.get` | Get single article by ID |
+| `article.mark_read` | Mark article as read |
+| `article.mark_unread` | Mark article as unread |
+| `article.toggle_saved` | Toggle saved/bookmark status |
+| `article.search` | Search articles |
+
+### How It Works
+
+1. **Required for TUI** - The daemon must be running before starting the TUI
+2. **Independent Process** - Daemon runs separately from TUI, continues after TUI quits
+3. **Graceful Shutdown** - Use `daemon stop` or Ctrl+C to stop cleanly
+4. **PID File** - Tracks running daemon at `~/.local/share/kenseader/daemon.pid`
+5. **IPC Socket** - Unix socket at `~/.local/share/kenseader/kenseader.sock`
+6. **Configurable Intervals** - Customize all intervals in the config file
+
+### Configuration
+
+```toml
+[sync]
+refresh_interval_secs = 300   # Feed refresh (0 = disabled)
+cleanup_interval_secs = 3600  # Article cleanup
+summarize_interval_secs = 60  # AI summarization
+filter_interval_secs = 120    # Article filtering
+```
+
+Set `refresh_interval_secs = 0` to disable the background scheduler entirely.
+
+## Development
+
+### Running for Development
+
+```bash
+# Clone and build
+git clone https://github.com/kenxcomp/kenseader.git
+cd kenseader
+cargo build
+
+# Terminal 1: Start daemon with debug logging
+RUST_LOG=debug ./target/debug/kenseader daemon start
+
+# Terminal 2: Run TUI
+./target/debug/kenseader run
+```
+
+### Running for Production
+
+```bash
+# Build release version
+cargo build --release
+
+# Start daemon (can run in background or as a service)
+./target/release/kenseader daemon start &
+
+# Run TUI
+./target/release/kenseader run
+
+# Stop daemon when done
+./target/release/kenseader daemon stop
+```
+
+### Viewing Logs
+
+```bash
+# Run with specific log level
+RUST_LOG=info ./target/release/kenseader daemon start
+
+# Available levels: error, warn, info, debug, trace
+RUST_LOG=debug ./target/release/kenseader daemon start
+
+# Redirect logs to file
+RUST_LOG=info ./target/release/kenseader daemon start 2> /tmp/kenseader.log
+```
+
+### Testing IPC Connection
+
+You can test the IPC connection with a simple Python script:
+
+```python
+import socket
+import json
+import uuid
+
+socket_path = "~/.local/share/kenseader/kenseader.sock"
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect(socket_path)
+
+# Send ping request
+request = {"id": str(uuid.uuid4()), "method": "ping", "params": None}
+sock.sendall((json.dumps(request) + "\n").encode())
+print(sock.recv(4096).decode())  # {"id":"...","result":{"ok":true}}
+```
+
+## Smart Article Filtering
+
+Kenseader includes AI-powered article filtering that automatically scores articles based on your reading interests and filters out low-relevance content.
+
+### How It Works
+
+1. **Interest Learning** - The system tracks your reading behavior (clicks, saves, read completion) to learn your interests through tag affinities
+2. **AI Scoring** - Articles are scored using a combination of:
+   - **Profile Score (40%)** - Based on tag matching with your learned interests
+   - **AI Score (60%)** - AI evaluates article relevance to your interests
+3. **Auto-Filtering** - Articles below the relevance threshold are automatically marked as read (not deleted)
+
+### Workflow
+
+The filtering process runs in two stages:
+
+**Stage 1: Summarization**
+- Articles with 500+ characters get AI-generated summaries
+- Shorter articles skip summarization
+
+**Stage 2: Scoring & Filtering**
+- Articles with summaries are scored using "title + summary"
+- Short articles (< 500 chars) are scored using "title + content"
+- Articles scoring below the threshold (default 0.3) are auto-filtered
+
+### Configuration
+
+```toml
+[ai]
+# Minimum content length for AI summarization (chars)
+min_summarize_length = 500
+
+# Relevance threshold (0.0 - 1.0)
+# Articles scoring below this are auto-marked as read
+relevance_threshold = 0.3
+
+[sync]
+# How often to run article filtering (seconds)
+filter_interval_secs = 120
+```
+
+### Tips
+
+- **Higher threshold** (0.5+) = More aggressive filtering, only highly relevant articles shown
+- **Lower threshold** (0.2) = More permissive, shows most articles
+- Filtered articles are marked as read, not deleted - toggle unread mode with `i` to see them
 
 ## Troubleshooting
 

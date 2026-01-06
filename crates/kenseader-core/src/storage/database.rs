@@ -88,10 +88,24 @@ impl Database {
             .await?;
 
         // Add image_url column to articles (migration 007)
-        sqlx::query(MIGRATION_007_ARTICLE_IMAGE_URL)
+        if let Err(err) = sqlx::query(MIGRATION_007_ARTICLE_IMAGE_URL)
             .execute(&self.pool)
             .await
-            .ok(); // Ignore error if column already exists
+        {
+            if !is_duplicate_column_error(&err) {
+                return Err(err.into());
+            }
+        }
+
+        // Add relevance_score column to articles (migration 008)
+        if let Err(err) = sqlx::query(MIGRATION_008_ARTICLE_RELEVANCE_SCORE)
+            .execute(&self.pool)
+            .await
+        {
+            if !is_duplicate_column_error(&err) {
+                return Err(err.into());
+            }
+        }
 
         tracing::info!("Database migrations completed");
         Ok(())
@@ -100,6 +114,16 @@ impl Database {
     /// Get the connection pool
     pub fn pool(&self) -> &Pool<Sqlite> {
         &self.pool
+    }
+}
+
+fn is_duplicate_column_error(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::Database(db_err) => {
+            let message = db_err.message().to_lowercase();
+            message.contains("duplicate column")
+        }
+        _ => false,
     }
 }
 
@@ -206,4 +230,8 @@ CREATE INDEX IF NOT EXISTS idx_user_prefs_window ON user_preferences(time_window
 
 const MIGRATION_007_ARTICLE_IMAGE_URL: &str = r#"
 ALTER TABLE articles ADD COLUMN image_url TEXT
+"#;
+
+const MIGRATION_008_ARTICLE_RELEVANCE_SCORE: &str = r#"
+ALTER TABLE articles ADD COLUMN relevance_score REAL
 "#;

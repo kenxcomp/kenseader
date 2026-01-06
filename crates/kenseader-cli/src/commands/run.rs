@@ -2,7 +2,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -16,7 +16,7 @@ use ratatui::{
 use tokio::sync::mpsc;
 
 use kenseader_core::{
-    storage::{ArticleRepository, Database, FeedRepository},
+    ipc::DaemonClient,
     AppConfig,
 };
 use kenseader_tui::{
@@ -27,7 +27,16 @@ use kenseader_tui::{
     widgets::{ArticleDetailWidget, ArticleListWidget, StatusBarWidget, SubscriptionsWidget},
 };
 
-pub async fn run(db: Arc<Database>, config: Arc<AppConfig>) -> Result<()> {
+pub async fn run(config: Arc<AppConfig>) -> Result<()> {
+    // Create daemon client and check if daemon is running
+    let client = Arc::new(DaemonClient::new(config.socket_path()));
+
+    if !client.ping().await? {
+        return Err(anyhow!(
+            "Daemon is not running.\nPlease start the daemon first with:\n  kenseader daemon start"
+        ));
+    }
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -36,7 +45,7 @@ pub async fn run(db: Arc<Database>, config: Arc<AppConfig>) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app state
-    let mut app = App::new(db.clone(), config.clone());
+    let mut app = App::new(client.clone(), config.clone());
 
     // Load initial data
     load_feeds(&mut app).await?;
@@ -111,7 +120,7 @@ pub async fn run(db: Arc<Database>, config: Arc<AppConfig>) -> Result<()> {
             match event {
                 AppEvent::Key(key) => {
                     let action = handle_key_event(key, &app);
-                    handle_action(&mut app, action, &db, data_dir.as_ref()).await?;
+                    handle_action(&mut app, action, &client, data_dir.as_ref()).await?;
                 }
                 AppEvent::Resize(_, _) => {
                     // Recalculate heights on resize
@@ -195,8 +204,7 @@ fn spawn_image_load(
 }
 
 async fn load_feeds(app: &mut App) -> Result<()> {
-    let feed_repo = FeedRepository::new(&app.db);
-    app.feeds = feed_repo.list_all().await?;
+    app.feeds = app.client.list_feeds().await?;
 
     if !app.feeds.is_empty() {
         load_articles(app).await?;
@@ -211,11 +219,10 @@ async fn load_articles(app: &mut App) -> Result<()> {
 
 async fn load_articles_preserve_selection(app: &mut App, preserve: bool) -> Result<()> {
     if let Some(feed) = app.current_feed() {
-        let article_repo = ArticleRepository::new(&app.db);
         let unread_only = matches!(app.view_mode, ViewMode::UnreadOnly);
         let prev_selected = app.selected_article;
 
-        app.articles = article_repo.list_by_feed(feed.id, unread_only).await?;
+        app.articles = app.client.list_articles(Some(feed.id), unread_only).await?;
 
         if preserve && prev_selected < app.articles.len() {
             app.selected_article = prev_selected;
@@ -264,7 +271,7 @@ fn init_rich_article_state(app: &mut App, data_dir: Option<&PathBuf>) {
 async fn handle_action(
     app: &mut App,
     action: Action,
-    db: &Database,
+    client: &DaemonClient,
     data_dir: Option<&PathBuf>,
 ) -> Result<()> {
     // Clear pending key on any action except PendingG
@@ -286,8 +293,8 @@ async fn handle_action(
                 && matches!(app.view_mode, ViewMode::UnreadOnly)
             {
                 load_articles_preserve_selection(app, true).await?;
-                // Clear rich state since the article at the current index may have changed
-                app.rich_state = None;
+                // Re-initialize rich state since the article at the current index may have changed
+                init_rich_article_state(app, data_dir);
             }
         }
         Action::FocusRight => {
@@ -300,8 +307,7 @@ async fn handle_action(
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
                         let article_id = article.id;
-                        let article_repo = ArticleRepository::new(db);
-                        article_repo.mark_read(article_id).await?;
+                        client.mark_read(article_id).await?;
                         // Update local state without reloading (keeps article visible in unread-only mode)
                         if let Some(article) = app.current_article_mut() {
                             article.is_read = true;
@@ -375,8 +381,7 @@ async fn handle_action(
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
                         let article_id = article.id;
-                        let article_repo = ArticleRepository::new(db);
-                        article_repo.mark_read(article_id).await?;
+                        client.mark_read(article_id).await?;
                         // Update local state without reloading (keeps article visible in unread-only mode)
                         if let Some(article) = app.current_article_mut() {
                             article.is_read = true;
@@ -399,10 +404,10 @@ async fn handle_action(
         }
         Action::ToggleSaved => {
             if let Some(article) = app.current_article() {
-                let article_repo = ArticleRepository::new(db);
-                let saved = article_repo.toggle_saved(article.id).await?;
+                let saved = client.toggle_saved(article.id).await?;
                 app.set_status(if saved { "Article saved" } else { "Article unsaved" });
                 load_articles_preserve_selection(app, true).await?;
+                init_rich_article_state(app, data_dir);
             }
         }
         Action::Delete => {
@@ -416,10 +421,10 @@ async fn handle_action(
             match &app.mode {
                 Mode::DeleteConfirm(feed_id) => {
                     let feed_id = *feed_id;
-                    let feed_repo = FeedRepository::new(db);
-                    feed_repo.delete(feed_id).await?;
+                    client.delete_feed(feed_id).await?;
                     app.mode = Mode::Normal;
                     load_feeds(app).await?;
+                    init_rich_article_state(app, data_dir);
                     app.set_status("Feed deleted");
                 }
                 Mode::SearchForward(_) | Mode::SearchBackward(_) => {
@@ -442,11 +447,13 @@ async fn handle_action(
         Action::ToggleUnreadOnly => {
             app.toggle_view_mode();
             load_articles(app).await?;
+            init_rich_article_state(app, data_dir);
         }
         Action::ExitMode => {
             app.mode = Mode::Normal;
             app.view_mode = ViewMode::All;
             load_articles(app).await?;
+            init_rich_article_state(app, data_dir);
         }
         Action::StartSearchForward => {
             app.mode = Mode::SearchForward(String::new());
@@ -468,11 +475,12 @@ async fn handle_action(
         }
         Action::Refresh => {
             app.set_status("Refreshing feeds...");
-            // Fetch new articles from all feeds
-            match kenseader_core::scheduler::refresh_all_feeds(db, &app.config).await {
+            // Fetch new articles via daemon
+            match client.refresh(None).await {
                 Ok(new_count) => {
-                    // Reload data from database
+                    // Reload data from daemon
                     load_feeds(app).await?;
+                    init_rich_article_state(app, data_dir);
                     if new_count > 0 {
                         app.set_status(format!("Refreshed: {} new articles", new_count));
                     } else {
