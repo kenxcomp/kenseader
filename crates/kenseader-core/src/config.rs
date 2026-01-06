@@ -314,9 +314,11 @@ impl AppConfig {
     }
 
     /// Get the configuration file path
+    /// Always uses ~/.config/kenseader/config.toml on all platforms
     pub fn config_path() -> PathBuf {
-        dirs::config_dir()
+        dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
+            .join(".config")
             .join("kenseader")
             .join("config.toml")
     }
@@ -324,5 +326,15 @@ impl AppConfig {
     /// Get the database file path
     pub fn database_path(&self) -> PathBuf {
         self.general.data_dir.join("kenseader.db")
+    }
+
+    /// Get the Unix socket path for IPC
+    pub fn socket_path(&self) -> PathBuf {
+        self.general.data_dir.join("kenseader.sock")
+    }
+
+    /// Get the data directory
+    pub fn data_dir(&self) -> &PathBuf {
+        &self.general.data_dir
     }
 }

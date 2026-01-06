@@ -9,6 +9,7 @@ use tracing::{info, warn};
 
 use kenseader_core::{
     ai::Summarizer,
+    ipc::DaemonServer,
     scheduler::SchedulerService,
     storage::Database,
     AppConfig,
@@ -126,6 +127,9 @@ pub async fn start(db: Arc<Database>, config: Arc<AppConfig>) -> Result<()> {
         svc
     };
 
+    // Create IPC server
+    let ipc_server = DaemonServer::new(db.clone(), config.clone());
+
     println!(
         "Daemon started (PID: {}). Press Ctrl+C or run 'kenseader daemon stop' to stop.",
         std::process::id()
@@ -133,9 +137,22 @@ pub async fn start(db: Arc<Database>, config: Arc<AppConfig>) -> Result<()> {
     println!("  Refresh interval: {} seconds", config.sync.refresh_interval_secs);
     println!("  Cleanup interval: {} seconds", config.sync.cleanup_interval_secs);
     println!("  Summarize interval: {} seconds", config.sync.summarize_interval_secs);
+    println!("  IPC socket: {}", config.socket_path().display());
 
-    // Run scheduler (blocks until shutdown)
-    scheduler.run(shutdown_rx).await;
+    // Run scheduler and IPC server in parallel
+    let scheduler_shutdown_rx = shutdown_rx.clone();
+    let ipc_shutdown_rx = shutdown_rx;
+
+    tokio::select! {
+        _ = scheduler.run(scheduler_shutdown_rx) => {
+            info!("Scheduler stopped");
+        }
+        result = ipc_server.run(ipc_shutdown_rx) => {
+            if let Err(e) = result {
+                warn!("IPC server error: {}", e);
+            }
+        }
+    }
 
     // Cleanup
     remove_pid_file();

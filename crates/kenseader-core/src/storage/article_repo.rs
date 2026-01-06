@@ -30,6 +30,7 @@ struct ArticleRow {
     is_saved: i32,
     created_at: DateTime<Utc>,
     image_url: Option<String>,
+    relevance_score: Option<f64>,
 }
 
 impl From<ArticleRow> for Article {
@@ -52,6 +53,7 @@ impl From<ArticleRow> for Article {
             is_saved: row.is_saved != 0,
             created_at: row.created_at,
             image_url: row.image_url,
+            relevance_score: row.relevance_score,
             tags: Vec::new(),
         }
     }
@@ -144,7 +146,7 @@ impl<'a> ArticleRepository<'a> {
             r#"
             SELECT id, feed_id, guid, url, title, author, content, content_text,
                    summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at, image_url
+                   is_read, read_at, is_saved, created_at, image_url, relevance_score
             FROM articles
             WHERE id = ?
             "#,
@@ -169,7 +171,7 @@ impl<'a> ArticleRepository<'a> {
             r#"
             SELECT id, feed_id, guid, url, title, author, content, content_text,
                    summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at, image_url
+                   is_read, read_at, is_saved, created_at, image_url, relevance_score
             FROM articles
             WHERE feed_id = ? AND is_read = 0
             ORDER BY published_at DESC, created_at DESC
@@ -178,7 +180,7 @@ impl<'a> ArticleRepository<'a> {
             r#"
             SELECT id, feed_id, guid, url, title, author, content, content_text,
                    summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at, image_url
+                   is_read, read_at, is_saved, created_at, image_url, relevance_score
             FROM articles
             WHERE feed_id = ?
             ORDER BY published_at DESC, created_at DESC
@@ -199,7 +201,7 @@ impl<'a> ArticleRepository<'a> {
             r#"
             SELECT id, feed_id, guid, url, title, author, content, content_text,
                    summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at, image_url
+                   is_read, read_at, is_saved, created_at, image_url, relevance_score
             FROM articles
             WHERE is_read = 0 AND summary IS NOT NULL
             ORDER BY published_at DESC, created_at DESC
@@ -217,7 +219,7 @@ impl<'a> ArticleRepository<'a> {
             r#"
             SELECT id, feed_id, guid, url, title, author, content, content_text,
                    summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at, image_url
+                   is_read, read_at, is_saved, created_at, image_url, relevance_score
             FROM articles
             WHERE is_read = 0
             ORDER BY published_at DESC, created_at DESC
@@ -237,7 +239,7 @@ impl<'a> ArticleRepository<'a> {
             r#"
             SELECT id, feed_id, guid, url, title, author, content, content_text,
                    summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at, image_url
+                   is_read, read_at, is_saved, created_at, image_url, relevance_score
             FROM articles
             WHERE summary IS NULL AND content_text IS NOT NULL
             ORDER BY created_at DESC
@@ -328,6 +330,23 @@ impl<'a> ArticleRepository<'a> {
         Ok(())
     }
 
+    /// Update article relevance score
+    pub async fn update_relevance_score(&self, id: Uuid, score: f64) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE articles
+            SET relevance_score = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(score)
+        .bind(id.to_string())
+        .execute(self.db.pool())
+        .await?;
+
+        Ok(())
+    }
+
     /// Add tags to an article
     pub async fn add_tags(&self, article_id: Uuid, tags: &[String], source: &str) -> Result<()> {
         let now = Utc::now();
@@ -388,7 +407,7 @@ impl<'a> ArticleRepository<'a> {
                 r#"
                 SELECT id, feed_id, guid, url, title, author, content, content_text,
                        summary, summary_generated_at, published_at, fetched_at,
-                       is_read, read_at, is_saved, created_at, image_url
+                       is_read, read_at, is_saved, created_at, image_url, relevance_score
                 FROM articles
                 WHERE feed_id = ? AND (title LIKE ? OR content_text LIKE ?)
                 ORDER BY published_at DESC
@@ -405,7 +424,7 @@ impl<'a> ArticleRepository<'a> {
                 r#"
                 SELECT id, feed_id, guid, url, title, author, content, content_text,
                        summary, summary_generated_at, published_at, fetched_at,
-                       is_read, read_at, is_saved, created_at, image_url
+                       is_read, read_at, is_saved, created_at, image_url, relevance_score
                 FROM articles
                 WHERE title LIKE ? OR content_text LIKE ?
                 ORDER BY published_at DESC

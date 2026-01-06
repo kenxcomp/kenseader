@@ -54,23 +54,51 @@ cargo build --release
 - SQLite（通过 sqlx 内置）
 - 支持真彩色的终端（图片显示必需）
 
+## 架构
+
+Kenseader 采用**客户端-服务器架构**，TUI 和守护进程作为独立进程运行：
+
+```
+┌─────────────────┐         Unix Socket         ┌─────────────────────┐
+│  kenseader run  │  ◄────────────────────────► │  kenseader daemon   │
+│   (纯前端 TUI)   │      JSON-RPC 协议          │   (后端服务)         │
+└─────────────────┘                             └─────────────────────┘
+                                                         │
+                                                         ▼
+                                                ┌─────────────────────┐
+                                                │      SQLite DB      │
+                                                └─────────────────────┘
+```
+
+- **守护进程** (`kenseader daemon start`)：处理所有后端操作 - 订阅源刷新、文章清理、AI 摘要、数据库访问
+- **TUI** (`kenseader run`)：纯前端，通过 IPC 与守护进程通信
+- **IPC Socket**：`~/.local/share/kenseader/kenseader.sock`（Unix socket）
+
 ## 使用方法
 
 ### 快速开始
 
 ```bash
-# 订阅一个 RSS 源
+# 1. 订阅 RSS 源（不需要守护进程）
 kenseader subscribe --url https://hnrss.org/frontpage --name "Hacker News"
-
-# 或使用简写
 kenseader -s https://blog.rust-lang.org/feed.xml -n "Rust 博客"
 
-# 刷新订阅源
-kenseader refresh
+# 2. 启动守护进程（运行 TUI 前必须启动）
+kenseader daemon start
 
-# 启动终端界面
+# 3. 启动终端界面
 kenseader run
+
+# 4. 完成后停止守护进程
+kenseader daemon stop
 ```
+
+> **重要**：TUI 需要守护进程在运行中。如果没有先启动守护进程就运行 `kenseader run`，你会看到：
+> ```
+> Daemon is not running.
+> Please start the daemon first with:
+>   kenseader daemon start
+> ```
 
 ### 命令列表
 
@@ -134,7 +162,14 @@ kenseader run
 
 ## 配置
 
-配置文件位置：`~/.config/kenseader/config.toml`
+配置文件位置：`~/.config/kenseader/config.toml`（所有平台通用）
+
+> **注意**：项目目录中的 `config/default.toml` 只是模板文件。应用程序从 `~/.config/kenseader/config.toml` 读取配置。如果配置文件不存在，将使用默认值。要自定义设置，请将模板复制到正确位置：
+>
+> ```bash
+> mkdir -p ~/.config/kenseader
+> cp config/default.toml ~/.config/kenseader/config.toml
+> ```
 
 ```toml
 [general]
@@ -342,7 +377,7 @@ kenseader/
 
 ## 后台守护进程
 
-Kenseader 包含一个独立于 TUI 运行的后台守护进程，用于保持订阅源最新。
+守护进程是**核心后端服务**，处理所有数据操作。TUI 是纯前端，通过 Unix socket IPC 与守护进程通信。
 
 ### 启动守护进程
 
@@ -357,6 +392,18 @@ kenseader daemon status
 kenseader daemon stop
 ```
 
+### 守护进程输出
+
+启动守护进程后，你会看到：
+```
+Starting kenseader daemon...
+Daemon started (PID: 12345). Press Ctrl+C or run 'kenseader daemon stop' to stop.
+  Refresh interval: 300 seconds
+  Cleanup interval: 3600 seconds
+  Summarize interval: 60 seconds
+  IPC socket: /Users/you/.local/share/kenseader/kenseader.sock
+```
+
 ### 定时任务
 
 | 任务 | 默认间隔 | 描述 |
@@ -366,12 +413,33 @@ kenseader daemon stop
 | **AI 摘要生成** | 1 分钟 | 为新文章生成摘要 |
 | **文章过滤** | 2 分钟 | 评估文章相关性并自动过滤低相关性文章 |
 
+### IPC API
+
+守护进程通过 Unix socket 暴露以下操作：
+
+| 方法 | 描述 |
+|------|------|
+| `ping` | 健康检查 |
+| `status` | 获取守护进程状态和运行时间 |
+| `feed.list` | 获取所有订阅源及未读数 |
+| `feed.add` | 添加新订阅源 |
+| `feed.delete` | 删除订阅源 |
+| `feed.refresh` | 触发订阅源刷新 |
+| `article.list` | 获取文章列表（支持过滤） |
+| `article.get` | 通过 ID 获取单篇文章 |
+| `article.mark_read` | 标记文章为已读 |
+| `article.mark_unread` | 标记文章为未读 |
+| `article.toggle_saved` | 切换收藏/书签状态 |
+| `article.search` | 搜索文章 |
+
 ### 工作原理
 
-1. **独立进程** - 守护进程与 TUI 分离运行，退出 TUI 后继续运行
-2. **优雅退出** - 使用 `daemon stop` 或 Ctrl+C 正常停止
-3. **PID 文件** - 守护进程 PID 保存在 `~/.local/share/kenseader/daemon.pid`
-4. **可配置间隔** - 所有间隔都可在配置文件中自定义
+1. **TUI 必需** - 启动 TUI 前必须先运行守护进程
+2. **独立进程** - 守护进程与 TUI 分离运行，退出 TUI 后继续运行
+3. **优雅退出** - 使用 `daemon stop` 或 Ctrl+C 正常停止
+4. **PID 文件** - 守护进程 PID 保存在 `~/.local/share/kenseader/daemon.pid`
+5. **IPC Socket** - Unix socket 位于 `~/.local/share/kenseader/kenseader.sock`
+6. **可配置间隔** - 所有间隔都可在配置文件中自定义
 
 ### 配置选项
 
@@ -384,6 +452,71 @@ filter_interval_secs = 120    # 文章过滤间隔
 ```
 
 设置 `refresh_interval_secs = 0` 可完全禁用后台调度器。
+
+## 开发
+
+### 开发环境运行
+
+```bash
+# 克隆并编译
+git clone https://github.com/kenxcomp/kenseader.git
+cd kenseader
+cargo build
+
+# 终端 1：启动守护进程并开启调试日志
+RUST_LOG=debug ./target/debug/kenseader daemon start
+
+# 终端 2：运行 TUI
+./target/debug/kenseader run
+```
+
+### 生产环境运行
+
+```bash
+# 编译发布版本
+cargo build --release
+
+# 启动守护进程（可在后台运行或作为服务）
+./target/release/kenseader daemon start &
+
+# 运行 TUI
+./target/release/kenseader run
+
+# 完成后停止守护进程
+./target/release/kenseader daemon stop
+```
+
+### 查看日志
+
+```bash
+# 以指定日志级别运行
+RUST_LOG=info ./target/release/kenseader daemon start
+
+# 可用级别：error, warn, info, debug, trace
+RUST_LOG=debug ./target/release/kenseader daemon start
+
+# 重定向日志到文件
+RUST_LOG=info ./target/release/kenseader daemon start 2> /tmp/kenseader.log
+```
+
+### 测试 IPC 连接
+
+可以用简单的 Python 脚本测试 IPC 连接：
+
+```python
+import socket
+import json
+import uuid
+
+socket_path = "~/.local/share/kenseader/kenseader.sock"
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect(socket_path)
+
+# 发送 ping 请求
+request = {"id": str(uuid.uuid4()), "method": "ping", "params": None}
+sock.sendall((json.dumps(request) + "\n").encode())
+print(sock.recv(4096).decode())  # {"id":"...","result":{"ok":true}}
+```
 
 ## 智能文章过滤
 

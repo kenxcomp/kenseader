@@ -48,6 +48,8 @@ pub struct Article {
     pub is_saved: bool,
     pub created_at: DateTime<Utc>,
     pub image_url: Option<String>,
+    /// AI-computed relevance score (0.0 - 1.0)
+    pub relevance_score: Option<f64>,
     #[serde(default)]
     pub tags: Vec<String>,
 }

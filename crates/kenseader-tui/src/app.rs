@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use kenseader_core::feed::{Article, Feed};
-use kenseader_core::storage::Database;
+use kenseader_core::ipc::DaemonClient;
 use kenseader_core::AppConfig;
 use uuid::Uuid;
 
@@ -163,8 +163,8 @@ pub enum Mode {
 
 /// Application state
 pub struct App {
-    /// Database connection
-    pub db: Arc<Database>,
+    /// Daemon client for IPC communication
+    pub client: Arc<DaemonClient>,
     /// Application configuration
     pub config: Arc<AppConfig>,
     /// List of feeds
@@ -200,9 +200,9 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(db: Arc<Database>, config: Arc<AppConfig>) -> Self {
+    pub fn new(client: Arc<DaemonClient>, config: Arc<AppConfig>) -> Self {
         Self {
-            db,
+            client,
             config,
             feeds: Vec::new(),
             selected_feed: 0,

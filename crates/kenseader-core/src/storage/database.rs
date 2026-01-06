@@ -97,6 +97,16 @@ impl Database {
             }
         }
 
+        // Add relevance_score column to articles (migration 008)
+        if let Err(err) = sqlx::query(MIGRATION_008_ARTICLE_RELEVANCE_SCORE)
+            .execute(&self.pool)
+            .await
+        {
+            if !is_duplicate_column_error(&err) {
+                return Err(err.into());
+            }
+        }
+
         tracing::info!("Database migrations completed");
         Ok(())
     }
@@ -220,4 +230,8 @@ CREATE INDEX IF NOT EXISTS idx_user_prefs_window ON user_preferences(time_window
 
 const MIGRATION_007_ARTICLE_IMAGE_URL: &str = r#"
 ALTER TABLE articles ADD COLUMN image_url TEXT
+"#;
+
+const MIGRATION_008_ARTICLE_RELEVANCE_SCORE: &str = r#"
+ALTER TABLE articles ADD COLUMN relevance_score REAL
 "#;

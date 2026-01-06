@@ -91,7 +91,8 @@ async fn main() -> Result<()> {
     // Handle commands
     match cli.command {
         Some(Commands::Run) | None => {
-            commands::run::run(db, config).await
+            // TUI uses daemon client, no direct database access
+            commands::run::run(config).await
         }
         Some(Commands::Subscribe { url, name }) => {
             commands::subscribe::run(&db, &config, &url, &name).await

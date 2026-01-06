@@ -55,23 +55,51 @@ cargo build --release
 - SQLite (bundled via sqlx)
 - Terminal with true color support (required for image display)
 
+## Architecture
+
+Kenseader uses a **client-server architecture** with the TUI and daemon running as separate processes:
+
+```
+┌─────────────────┐         Unix Socket         ┌─────────────────────┐
+│  kenseader run  │  ◄────────────────────────► │  kenseader daemon   │
+│   (Pure TUI)    │      JSON-RPC Protocol      │   (Backend Service) │
+└─────────────────┘                             └─────────────────────┘
+                                                         │
+                                                         ▼
+                                                ┌─────────────────────┐
+                                                │      SQLite DB      │
+                                                └─────────────────────┘
+```
+
+- **Daemon** (`kenseader daemon start`): Handles all backend operations - feed refresh, article cleanup, AI summarization, database access
+- **TUI** (`kenseader run`): Pure frontend that communicates with daemon via IPC
+- **IPC Socket**: `~/.local/share/kenseader/kenseader.sock` (Unix socket)
+
 ## Usage
 
 ### Quick Start
 
 ```bash
-# Subscribe to a feed
+# 1. Subscribe to feeds (can be done without daemon)
 kenseader subscribe --url https://hnrss.org/frontpage --name "Hacker News"
-
-# Or use shorthand
 kenseader -s https://blog.rust-lang.org/feed.xml -n "Rust Blog"
 
-# Refresh feeds
-kenseader refresh
+# 2. Start the daemon (REQUIRED before running TUI)
+kenseader daemon start
 
-# Launch the TUI
+# 3. Launch the TUI
 kenseader run
+
+# 4. When done, stop the daemon
+kenseader daemon stop
 ```
+
+> **Important**: The TUI requires the daemon to be running. If you try to run `kenseader run` without starting the daemon first, you'll see:
+> ```
+> Daemon is not running.
+> Please start the daemon first with:
+>   kenseader daemon start
+> ```
 
 ### Commands
 
@@ -135,7 +163,14 @@ kenseader run
 
 ## Configuration
 
-Configuration file location: `~/.config/kenseader/config.toml`
+Configuration file location: `~/.config/kenseader/config.toml` (same on all platforms)
+
+> **Note**: The `config/default.toml` file in the project directory is just a template. The application reads configuration from `~/.config/kenseader/config.toml`. If the config file doesn't exist, default values are used. To customize settings, copy the template to the correct location:
+>
+> ```bash
+> mkdir -p ~/.config/kenseader
+> cp config/default.toml ~/.config/kenseader/config.toml
+> ```
 
 ```toml
 [general]
@@ -344,7 +379,7 @@ kenseader/
 
 ## Background Daemon
 
-Kenseader includes a background daemon that runs independently of the TUI to keep your feeds up-to-date.
+The daemon is the **core backend service** that handles all data operations. The TUI is a pure frontend that communicates with the daemon via Unix socket IPC.
 
 ### Starting the Daemon
 
@@ -359,6 +394,18 @@ kenseader daemon status
 kenseader daemon stop
 ```
 
+### Daemon Output
+
+When the daemon starts, you'll see:
+```
+Starting kenseader daemon...
+Daemon started (PID: 12345). Press Ctrl+C or run 'kenseader daemon stop' to stop.
+  Refresh interval: 300 seconds
+  Cleanup interval: 3600 seconds
+  Summarize interval: 60 seconds
+  IPC socket: /Users/you/.local/share/kenseader/kenseader.sock
+```
+
 ### Scheduled Tasks
 
 | Task | Default Interval | Description |
@@ -368,12 +415,33 @@ kenseader daemon stop
 | **AI Summarization** | 1 minute | Generates summaries for new articles |
 | **Article Filtering** | 2 minutes | Scores articles by relevance and auto-filters low-relevance ones |
 
+### IPC API
+
+The daemon exposes these operations via Unix socket:
+
+| Method | Description |
+|--------|-------------|
+| `ping` | Health check |
+| `status` | Get daemon status and uptime |
+| `feed.list` | List all feeds with unread counts |
+| `feed.add` | Add a new feed subscription |
+| `feed.delete` | Delete a feed |
+| `feed.refresh` | Trigger feed refresh |
+| `article.list` | List articles (with filters) |
+| `article.get` | Get single article by ID |
+| `article.mark_read` | Mark article as read |
+| `article.mark_unread` | Mark article as unread |
+| `article.toggle_saved` | Toggle saved/bookmark status |
+| `article.search` | Search articles |
+
 ### How It Works
 
-1. **Independent Process** - Daemon runs separately from TUI, continues after TUI quits
-2. **Graceful Shutdown** - Use `daemon stop` or Ctrl+C to stop cleanly
-3. **PID File** - Tracks running daemon at `~/.local/share/kenseader/daemon.pid`
-4. **Configurable Intervals** - Customize all intervals in the config file
+1. **Required for TUI** - The daemon must be running before starting the TUI
+2. **Independent Process** - Daemon runs separately from TUI, continues after TUI quits
+3. **Graceful Shutdown** - Use `daemon stop` or Ctrl+C to stop cleanly
+4. **PID File** - Tracks running daemon at `~/.local/share/kenseader/daemon.pid`
+5. **IPC Socket** - Unix socket at `~/.local/share/kenseader/kenseader.sock`
+6. **Configurable Intervals** - Customize all intervals in the config file
 
 ### Configuration
 
@@ -386,6 +454,71 @@ filter_interval_secs = 120    # Article filtering
 ```
 
 Set `refresh_interval_secs = 0` to disable the background scheduler entirely.
+
+## Development
+
+### Running for Development
+
+```bash
+# Clone and build
+git clone https://github.com/kenxcomp/kenseader.git
+cd kenseader
+cargo build
+
+# Terminal 1: Start daemon with debug logging
+RUST_LOG=debug ./target/debug/kenseader daemon start
+
+# Terminal 2: Run TUI
+./target/debug/kenseader run
+```
+
+### Running for Production
+
+```bash
+# Build release version
+cargo build --release
+
+# Start daemon (can run in background or as a service)
+./target/release/kenseader daemon start &
+
+# Run TUI
+./target/release/kenseader run
+
+# Stop daemon when done
+./target/release/kenseader daemon stop
+```
+
+### Viewing Logs
+
+```bash
+# Run with specific log level
+RUST_LOG=info ./target/release/kenseader daemon start
+
+# Available levels: error, warn, info, debug, trace
+RUST_LOG=debug ./target/release/kenseader daemon start
+
+# Redirect logs to file
+RUST_LOG=info ./target/release/kenseader daemon start 2> /tmp/kenseader.log
+```
+
+### Testing IPC Connection
+
+You can test the IPC connection with a simple Python script:
+
+```python
+import socket
+import json
+import uuid
+
+socket_path = "~/.local/share/kenseader/kenseader.sock"
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect(socket_path)
+
+# Send ping request
+request = {"id": str(uuid.uuid4()), "method": "ping", "params": None}
+sock.sendall((json.dumps(request) + "\n").encode())
+print(sock.recv(4096).decode())  # {"id":"...","result":{"ok":true}}
+```
 
 ## Smart Article Filtering
 

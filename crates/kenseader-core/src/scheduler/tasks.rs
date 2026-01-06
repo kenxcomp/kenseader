@@ -286,6 +286,19 @@ pub async fn score_and_filter_articles(
                         if let Some(score) = result.score {
                             scored += 1;
 
+                            // Save score to database for debugging
+                            if let Err(e) = article_repo.update_relevance_score(article_id, score).await {
+                                tracing::warn!("Failed to save relevance score for {}: {}", article_id, e);
+                            }
+
+                            // Log each article's score for debugging
+                            tracing::info!(
+                                "Article {} scored {:.2} (threshold: {:.2})",
+                                article_id,
+                                score,
+                                relevance_threshold
+                            );
+
                             if score < relevance_threshold {
                                 // Mark low-relevance articles as read (auto-filter)
                                 if let Err(e) = article_repo.mark_read(article_id).await {
@@ -297,8 +310,8 @@ pub async fn score_and_filter_articles(
                                     continue;
                                 }
                                 filtered += 1;
-                                tracing::debug!(
-                                    "Filtered article {} with score {:.2} (threshold: {:.2})",
+                                tracing::info!(
+                                    "FILTERED: Article {} with score {:.2} < threshold {:.2}",
                                     article_id,
                                     score,
                                     relevance_threshold
