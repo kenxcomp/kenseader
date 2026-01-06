@@ -211,6 +211,26 @@ impl<'a> ArticleRepository<'a> {
         Ok(rows.into_iter().map(Article::from).collect())
     }
 
+    /// Get all unread articles
+    pub async fn list_unread(&self, limit: u32) -> Result<Vec<Article>> {
+        let rows: Vec<ArticleRow> = sqlx::query_as(
+            r#"
+            SELECT id, feed_id, guid, url, title, author, content, content_text,
+                   summary, summary_generated_at, published_at, fetched_at,
+                   is_read, read_at, is_saved, created_at, image_url
+            FROM articles
+            WHERE is_read = 0
+            ORDER BY published_at DESC, created_at DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(self.db.pool())
+        .await?;
+
+        Ok(rows.into_iter().map(Article::from).collect())
+    }
+
     /// Get articles that need summarization
     pub async fn list_unsummarized(&self, limit: u32) -> Result<Vec<Article>> {
         let rows: Vec<ArticleRow> = sqlx::query_as(

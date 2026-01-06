@@ -9,7 +9,7 @@ use crate::config::AppConfig;
 use crate::storage::Database;
 use crate::Result;
 
-use super::tasks::{cleanup_old_articles, refresh_all_feeds, summarize_pending_articles};
+use super::tasks::{cleanup_old_articles, refresh_all_feeds, score_and_filter_articles, summarize_pending_articles};
 
 /// Events emitted by the scheduler to notify the UI of changes
 #[derive(Debug, Clone)]
@@ -20,6 +20,8 @@ pub enum SchedulerEvent {
     ArticlesCleaned { deleted: u32 },
     /// Articles have been summarized
     ArticlesSummarized { count: u32 },
+    /// Articles have been scored and filtered
+    ArticlesFiltered { scored: u32, filtered: u32 },
     /// An error occurred during a background task
     Error { task: String, message: String },
 }
@@ -69,6 +71,7 @@ impl SchedulerService {
         let refresh_secs = self.config.sync.refresh_interval_secs;
         let cleanup_secs = self.config.sync.cleanup_interval_secs;
         let summarize_secs = self.config.sync.summarize_interval_secs;
+        let filter_secs = self.config.sync.filter_interval_secs;
 
         // Skip if refresh is disabled (0)
         if refresh_secs == 0 {
@@ -79,8 +82,8 @@ impl SchedulerService {
         }
 
         info!(
-            "Scheduler started: refresh={}s, cleanup={}s, summarize={}s",
-            refresh_secs, cleanup_secs, summarize_secs
+            "Scheduler started: refresh={}s, cleanup={}s, summarize={}s, filter={}s",
+            refresh_secs, cleanup_secs, summarize_secs, filter_secs
         );
 
         let mut refresh_interval =
@@ -89,11 +92,14 @@ impl SchedulerService {
             tokio::time::interval(Duration::from_secs(cleanup_secs));
         let mut summarize_interval =
             tokio::time::interval(Duration::from_secs(summarize_secs));
+        let mut filter_interval =
+            tokio::time::interval(Duration::from_secs(filter_secs));
 
         // Skip the first tick (fires immediately)
         refresh_interval.tick().await;
         cleanup_interval.tick().await;
         summarize_interval.tick().await;
+        filter_interval.tick().await;
 
         loop {
             tokio::select! {
@@ -160,6 +166,30 @@ impl SchedulerService {
                                 error!("Scheduled summarization failed: {}", e);
                                 self.send_event(SchedulerEvent::Error {
                                     task: "summarize".to_string(),
+                                    message: e.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // Score and filter articles (if AI is enabled)
+                _ = filter_interval.tick() => {
+                    if let Some(ref summarizer) = self.summarizer {
+                        debug!("Running scheduled filtering");
+                        let threshold = self.config.ai.relevance_threshold;
+                        let min_len = self.config.ai.min_summarize_length;
+                        match score_and_filter_articles(&self.db, summarizer.clone(), threshold, min_len).await {
+                            Ok((scored, filtered)) => {
+                                if scored > 0 {
+                                    info!("Scheduled filtering: scored {}, filtered {}", scored, filtered);
+                                }
+                                self.send_event(SchedulerEvent::ArticlesFiltered { scored, filtered });
+                            }
+                            Err(e) => {
+                                error!("Scheduled filtering failed: {}", e);
+                                self.send_event(SchedulerEvent::Error {
+                                    task: "filter".to_string(),
                                     message: e.to_string(),
                                 });
                             }

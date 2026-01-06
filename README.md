@@ -7,7 +7,8 @@ A high-performance terminal RSS reader with AI-powered summarization and rich co
 - **Terminal UI** - Beautiful TUI built with [ratatui](https://github.com/ratatui/ratatui)
 - **Vim-Style Navigation** - Full vim keybindings for efficient navigation
 - **AI Summarization** - Automatic article summaries via multiple AI providers (Claude, Gemini, OpenAI, Codex)
-- **Background Scheduler** - Automatic feed refresh, article cleanup, and AI summarization in the background
+- **Smart Article Filtering** - AI-powered relevance scoring based on user interests, auto-filters low-relevance articles
+- **Background Scheduler** - Automatic feed refresh, article cleanup, AI summarization, and filtering in the background
 - **Inline Image Display** - Images displayed at their original positions within article content
 - **Rich Content Rendering** - Styled headings, quotes, code blocks, and lists
 - **Protocol Auto-Detection** - Automatically selects best image protocol (Sixel/Kitty/iTerm2/Halfblocks)
@@ -161,6 +162,11 @@ claude_model = "claude-sonnet-4-20250514"
 max_summary_tokens = 150
 concurrency = 2
 
+# Article filtering settings
+min_summarize_length = 500    # Minimum chars for AI summarization
+max_summary_length = 150      # Maximum summary output length
+relevance_threshold = 0.3     # Articles below this score are auto-filtered (0.0-1.0)
+
 [ui]
 tick_rate_ms = 100
 show_author = true
@@ -171,6 +177,7 @@ image_preview = true
 refresh_interval_secs = 300   # Auto-refresh interval (0 = disabled)
 cleanup_interval_secs = 3600  # Old article cleanup interval
 summarize_interval_secs = 60  # AI summarization interval
+filter_interval_secs = 120    # Article filtering interval
 request_timeout_secs = 30
 rate_limit_ms = 1000
 
@@ -359,6 +366,7 @@ kenseader daemon stop
 | **Feed Refresh** | 5 minutes | Fetches new articles from all subscribed feeds |
 | **Article Cleanup** | 1 hour | Removes articles older than retention period |
 | **AI Summarization** | 1 minute | Generates summaries for new articles |
+| **Article Filtering** | 2 minutes | Scores articles by relevance and auto-filters low-relevance ones |
 
 ### How It Works
 
@@ -374,9 +382,57 @@ kenseader daemon stop
 refresh_interval_secs = 300   # Feed refresh (0 = disabled)
 cleanup_interval_secs = 3600  # Article cleanup
 summarize_interval_secs = 60  # AI summarization
+filter_interval_secs = 120    # Article filtering
 ```
 
 Set `refresh_interval_secs = 0` to disable the background scheduler entirely.
+
+## Smart Article Filtering
+
+Kenseader includes AI-powered article filtering that automatically scores articles based on your reading interests and filters out low-relevance content.
+
+### How It Works
+
+1. **Interest Learning** - The system tracks your reading behavior (clicks, saves, read completion) to learn your interests through tag affinities
+2. **AI Scoring** - Articles are scored using a combination of:
+   - **Profile Score (40%)** - Based on tag matching with your learned interests
+   - **AI Score (60%)** - AI evaluates article relevance to your interests
+3. **Auto-Filtering** - Articles below the relevance threshold are automatically marked as read (not deleted)
+
+### Workflow
+
+The filtering process runs in two stages:
+
+**Stage 1: Summarization**
+- Articles with 500+ characters get AI-generated summaries
+- Shorter articles skip summarization
+
+**Stage 2: Scoring & Filtering**
+- Articles with summaries are scored using "title + summary"
+- Short articles (< 500 chars) are scored using "title + content"
+- Articles scoring below the threshold (default 0.3) are auto-filtered
+
+### Configuration
+
+```toml
+[ai]
+# Minimum content length for AI summarization (chars)
+min_summarize_length = 500
+
+# Relevance threshold (0.0 - 1.0)
+# Articles scoring below this are auto-marked as read
+relevance_threshold = 0.3
+
+[sync]
+# How often to run article filtering (seconds)
+filter_interval_secs = 120
+```
+
+### Tips
+
+- **Higher threshold** (0.5+) = More aggressive filtering, only highly relevant articles shown
+- **Lower threshold** (0.2) = More permissive, shows most articles
+- Filtered articles are marked as read, not deleted - toggle unread mode with `i` to see them
 
 ## Troubleshooting
 

@@ -2,7 +2,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use super::{AiProvider, ArticleForSummary, BatchSummaryResult};
+use super::{AiProvider, ArticleForScoring, ArticleForSummary, BatchScoreResult, BatchSummaryResult};
 use crate::{Error, Result};
 
 fn truncate_chars(input: &str, max_chars: usize) -> &str {
@@ -258,6 +258,81 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
                         id: a.id,
                         summary: None,
                         error: Some("Summary not found in response".to_string()),
+                    }
+                }
+            })
+            .collect())
+    }
+
+    async fn batch_score_relevance(
+        &self,
+        articles: Vec<ArticleForScoring>,
+        interests: &[String],
+    ) -> Result<Vec<BatchScoreResult>> {
+        if articles.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if interests.is_empty() {
+            return Ok(articles
+                .into_iter()
+                .map(|a| BatchScoreResult {
+                    id: a.id,
+                    score: Some(0.5),
+                    error: None,
+                })
+                .collect());
+        }
+
+        let interests_str = interests.join(", ");
+        let mut prompt = format!(
+            "Rate how relevant each article is to someone interested in: {interests_str}.\n\
+            For EACH article, respond with a score from 0 to 100.\n\
+            Format your response EXACTLY as follows, one per line:\n\
+            [ARTICLE_ID]: score\n\n"
+        );
+
+        for article in &articles {
+            let truncated = truncate_chars(&article.content, 1000);
+            prompt.push_str(&format!(
+                "---ARTICLE [{}]---\n{}\n\n",
+                article.id, truncated
+            ));
+        }
+
+        prompt.push_str("Now provide scores using the format [ARTICLE_ID]: score\n");
+
+        let result = self.chat(&prompt, 200).await?;
+
+        let mut scores: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+
+        for line in result.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                if let Some(end_bracket) = line.find("]:") {
+                    let id = &line[1..end_bracket];
+                    let score_str = line[end_bracket + 2..].trim();
+                    if let Ok(score) = score_str.parse::<f64>() {
+                        scores.insert(id.to_string(), score / 100.0);
+                    }
+                }
+            }
+        }
+
+        Ok(articles
+            .into_iter()
+            .map(|a| {
+                if let Some(&score) = scores.get(&a.id) {
+                    BatchScoreResult {
+                        id: a.id,
+                        score: Some(score),
+                        error: None,
+                    }
+                } else {
+                    BatchScoreResult {
+                        id: a.id,
+                        score: None,
+                        error: Some("Score not found in response".to_string()),
                     }
                 }
             })

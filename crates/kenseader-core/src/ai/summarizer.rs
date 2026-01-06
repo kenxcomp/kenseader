@@ -4,7 +4,7 @@ use super::providers::{
     AiProvider, ClaudeApiProvider, ClaudeCliProvider, CliProvider, CliType,
     GeminiApiProvider, OpenAiProvider,
 };
-pub use super::providers::{ArticleForSummary, BatchSummaryResult};
+pub use super::providers::{ArticleForScoring, ArticleForSummary, BatchScoreResult, BatchSummaryResult};
 use crate::config::AppConfig;
 use crate::Result;
 
@@ -71,6 +71,15 @@ impl Summarizer {
     /// Batch summarize multiple articles in one API call
     pub async fn batch_summarize(&self, articles: Vec<ArticleForSummary>) -> Result<Vec<BatchSummaryResult>> {
         self.provider.batch_summarize(articles).await
+    }
+
+    /// Batch score multiple articles for relevance in one API call
+    pub async fn batch_score_relevance(
+        &self,
+        articles: Vec<ArticleForScoring>,
+        interests: &[String],
+    ) -> Result<Vec<BatchScoreResult>> {
+        self.provider.batch_score_relevance(articles, interests).await
     }
 
     /// Get the character limit for batch processing
