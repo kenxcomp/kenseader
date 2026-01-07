@@ -9,7 +9,7 @@ use crate::config::AppConfig;
 use crate::storage::Database;
 use crate::Result;
 
-use super::tasks::{cleanup_old_articles, refresh_all_feeds, score_and_filter_articles, summarize_pending_articles};
+use super::tasks::{classify_pending_articles, cleanup_old_articles, refresh_all_feeds, score_and_filter_articles, summarize_pending_articles};
 
 /// Events emitted by the scheduler to notify the UI of changes
 #[derive(Debug, Clone)]
@@ -22,6 +22,8 @@ pub enum SchedulerEvent {
     ArticlesSummarized { count: u32 },
     /// Articles have been scored and filtered
     ArticlesFiltered { scored: u32, filtered: u32 },
+    /// Articles have been classified for style/tone
+    ArticlesClassified { count: u32 },
     /// An error occurred during a background task
     Error { task: String, message: String },
 }
@@ -176,6 +178,7 @@ impl SchedulerService {
                 // Score and filter articles (if AI is enabled)
                 _ = filter_interval.tick() => {
                     if let Some(ref summarizer) = self.summarizer {
+                        // Run filtering
                         debug!("Running scheduled filtering");
                         let threshold = self.config.ai.relevance_threshold;
                         let min_len = self.config.ai.min_summarize_length;
@@ -190,6 +193,24 @@ impl SchedulerService {
                                 error!("Scheduled filtering failed: {}", e);
                                 self.send_event(SchedulerEvent::Error {
                                     task: "filter".to_string(),
+                                    message: e.to_string(),
+                                });
+                            }
+                        }
+
+                        // Run classification after filtering
+                        debug!("Running scheduled classification");
+                        match classify_pending_articles(&self.db, summarizer.clone(), 10).await {
+                            Ok(count) => {
+                                if count > 0 {
+                                    info!("Scheduled classification: {} articles", count);
+                                }
+                                self.send_event(SchedulerEvent::ArticlesClassified { count });
+                            }
+                            Err(e) => {
+                                error!("Scheduled classification failed: {}", e);
+                                self.send_event(SchedulerEvent::Error {
+                                    task: "classify".to_string(),
                                     message: e.to_string(),
                                 });
                             }

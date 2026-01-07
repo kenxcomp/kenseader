@@ -42,6 +42,12 @@ enum Commands {
         /// Name of the subscription to remove
         name: String,
     },
+    /// Import feeds from OPML file
+    Import {
+        /// Path to OPML file
+        #[arg(short = 'f', long = "file")]
+        file: String,
+    },
     /// List all subscriptions
     List,
     /// Refresh all feeds
@@ -99,6 +105,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Unsubscribe { name }) => {
             commands::unsubscribe::run(&db, &name).await
+        }
+        Some(Commands::Import { file }) => {
+            commands::import::run(&db, &config, &file).await
         }
         Some(Commands::List) => {
             commands::list::run(&db).await

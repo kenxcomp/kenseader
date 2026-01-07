@@ -27,6 +27,12 @@ pub enum Action {
     NextMatch,
     PrevMatch,
     ToggleUnreadOnly,
+    ToggleRead,       // Toggle article read/unread status
+    HistoryBack,      // Navigate to previous article in history
+    HistoryForward,   // Navigate to next article in history
+    ToggleSelect,     // Space: toggle selection and move to next
+    VisualMode,       // 'v': enter/exit visual selection mode
+    ClearSelection,   // Esc: clear selection
     ExitMode,
     Confirm,
     Cancel,
@@ -44,7 +50,7 @@ pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
 
     // Handle special modes
     match &app.mode {
-        Mode::DeleteConfirm(_) => return handle_confirm_mode(key),
+        Mode::DeleteConfirm(_) | Mode::BatchDeleteConfirm => return handle_confirm_mode(key),
         Mode::Help => {
             // Any key exits help
             return Action::ExitMode;
@@ -97,9 +103,17 @@ pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
         (KeyCode::Char('s'), KeyModifiers::NONE) => Action::ToggleSaved,
         (KeyCode::Char('r'), KeyModifiers::NONE) => Action::Refresh,
 
-        // Delete (subscriptions only)
-        (KeyCode::Char('d'), KeyModifiers::NONE) if app.focus == Focus::Subscriptions => {
-            Action::Delete
+        // 'd' key: Delete feed in Subscriptions, Toggle read in ArticleList/Detail
+        // Batch delete takes priority if feeds are selected
+        (KeyCode::Char('d'), KeyModifiers::NONE) => {
+            if !app.selected_feeds.is_empty() {
+                Action::Delete
+            } else {
+                match app.focus {
+                    Focus::Subscriptions => Action::Delete,
+                    Focus::ArticleList | Focus::ArticleDetail => Action::ToggleRead,
+                }
+            }
         }
 
         // Search
@@ -110,7 +124,26 @@ pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
 
         // View mode toggle
         (KeyCode::Char('i'), KeyModifiers::NONE) => Action::ToggleUnreadOnly,
-        (KeyCode::Esc, KeyModifiers::NONE) => Action::ExitMode,
+
+        // History navigation
+        (KeyCode::Char('u'), KeyModifiers::NONE) => Action::HistoryBack,
+        (KeyCode::Char('r'), KeyModifiers::CONTROL) => Action::HistoryForward,
+
+        // Selection (yazi-like)
+        (KeyCode::Char(' '), KeyModifiers::NONE) => Action::ToggleSelect,
+        (KeyCode::Char('v'), KeyModifiers::NONE) => Action::VisualMode,
+
+        // Escape: clear selection if any, otherwise exit mode
+        (KeyCode::Esc, KeyModifiers::NONE) => {
+            if app.is_visual_mode()
+                || !app.selected_articles.is_empty()
+                || !app.selected_feeds.is_empty()
+            {
+                Action::ClearSelection
+            } else {
+                Action::ExitMode
+            }
+        }
 
         _ => Action::None,
     }

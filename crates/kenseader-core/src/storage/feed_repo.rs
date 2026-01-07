@@ -138,6 +138,41 @@ impl<'a> FeedRepository<'a> {
         Ok(feeds)
     }
 
+    /// List feeds that need refreshing (last_fetched_at is NULL or older than threshold)
+    pub async fn list_needs_refresh(&self, min_interval_secs: u64) -> Result<Vec<Feed>> {
+        let threshold = Utc::now() - chrono::Duration::seconds(min_interval_secs as i64);
+
+        let rows: Vec<FeedRow> = sqlx::query_as(
+            r#"
+            SELECT id, url, local_name, title, description, site_url, icon_url,
+                   last_fetched_at, fetch_error, created_at, updated_at
+            FROM feeds
+            WHERE last_fetched_at IS NULL
+               OR last_fetched_at < ?
+            ORDER BY local_name ASC
+            "#,
+        )
+        .bind(threshold)
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let mut feeds: Vec<Feed> = rows.into_iter().map(Feed::from).collect();
+
+        // Fetch unread counts
+        for feed in &mut feeds {
+            let count: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM articles WHERE feed_id = ? AND is_read = 0",
+            )
+            .bind(feed.id.to_string())
+            .fetch_one(self.db.pool())
+            .await?;
+
+            feed.unread_count = count.0 as u32;
+        }
+
+        Ok(feeds)
+    }
+
     /// Update feed metadata after successful fetch
     pub async fn update_metadata(
         &self,

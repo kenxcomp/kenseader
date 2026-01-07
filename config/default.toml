@@ -71,8 +71,14 @@ show_timestamps = true
 image_preview = true
 
 [sync]
-# Auto-refresh interval in seconds (0 = disabled)
-refresh_interval_secs = 300
+# Scheduler check interval in seconds (0 = disabled)
+# This controls how often the scheduler runs to check for feeds that need refreshing
+refresh_interval_secs = 3600
+
+# Minimum seconds between refreshes for each individual feed
+# Each feed will only be refreshed if this much time has passed since its last fetch
+# 43200 = 12 hours, 86400 = 24 hours, 0 = refresh all feeds every time
+feed_refresh_interval_secs = 43200
 
 # Cleanup interval in seconds (remove old articles)
 cleanup_interval_secs = 3600

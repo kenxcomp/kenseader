@@ -19,6 +19,7 @@ impl<'a> ProfileAnalyzer<'a> {
         self.compute_tag_affinities().await?;
         self.compute_feed_affinities().await?;
         self.compute_time_preferences().await?;
+        self.compute_style_preferences().await?;
         Ok(())
     }
 
@@ -187,6 +188,62 @@ impl<'a> ProfileAnalyzer<'a> {
                 .bind(PreferenceType::TimePreference.as_str())
                 .bind(&time_of_day)
                 .bind(count)
+                .bind(window.as_str())
+                .bind(now)
+                .execute(self.db.pool())
+                .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Compute style preferences from behavior events joined with article_styles
+    async fn compute_style_preferences(&self) -> Result<()> {
+        for window in [TimeWindow::Last1Day, TimeWindow::Last30Days] {
+            let cutoff = match window {
+                TimeWindow::Recent5Min => Utc::now() - Duration::minutes(5),
+                TimeWindow::Last1Day => Utc::now() - Duration::days(1),
+                TimeWindow::Last30Days => Utc::now() - Duration::days(30),
+            };
+
+            // Get weighted style type scores from events
+            let rows: Vec<(String, f64)> = sqlx::query_as(
+                r#"
+                SELECT s.style_type, SUM(
+                    CASE be.event_type
+                        WHEN 'exposure' THEN 0.1
+                        WHEN 'click' THEN 1.0
+                        WHEN 'read_start' THEN 1.5
+                        WHEN 'read_complete' THEN 3.0
+                        WHEN 'save' THEN 5.0
+                        WHEN 'view_repeat' THEN 4.0
+                        ELSE 0.5
+                    END
+                ) as weight
+                FROM behavior_events be
+                JOIN article_styles s ON be.article_id = s.article_id
+                WHERE be.created_at >= ? AND s.style_type IS NOT NULL
+                GROUP BY s.style_type
+                ORDER BY weight DESC
+                "#,
+            )
+            .bind(cutoff)
+            .fetch_all(self.db.pool())
+            .await?;
+
+            let now = Utc::now();
+            for (style_type, weight) in rows {
+                sqlx::query(
+                    r#"
+                    INSERT OR REPLACE INTO user_preferences
+                    (preference_type, preference_key, weight, time_window, computed_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    "#,
+                )
+                .bind(PreferenceType::StylePreference.as_str())
+                .bind(&style_type)
+                .bind(weight)
                 .bind(window.as_str())
                 .bind(now)
                 .execute(self.db.pool())

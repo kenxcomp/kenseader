@@ -24,6 +24,7 @@ dirs.workspace = true
 uuid.workspace = true
 url.workspace = true
 async-trait.workspace = true
+quick-xml = "0.37"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

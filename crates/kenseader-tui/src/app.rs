@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -155,8 +156,10 @@ pub enum Mode {
     SearchForward(String),
     /// Search mode (backward)
     SearchBackward(String),
-    /// Delete confirmation
+    /// Delete confirmation (single feed)
     DeleteConfirm(Uuid),
+    /// Batch delete confirmation (multiple feeds)
+    BatchDeleteConfirm,
     /// Help overlay
     Help,
 }
@@ -197,6 +200,20 @@ pub struct App {
     pub pending_key: Option<char>,
     /// Rich content state for current article (replaces image_cache)
     pub rich_state: Option<RichArticleState>,
+    /// Reading history stack - stores (feed_index, article_index) tuples
+    pub read_history: Vec<(usize, usize)>,
+    /// Current position in history (1-indexed, 0 means empty)
+    pub history_position: usize,
+    /// Selected article indices (for batch operations)
+    pub selected_articles: HashSet<usize>,
+    /// Selected feed indices (for batch operations)
+    pub selected_feeds: HashSet<usize>,
+    /// Visual mode start position for articles (None = not in visual mode)
+    pub visual_start_article: Option<usize>,
+    /// Visual mode start position for feeds (None = not in visual mode)
+    pub visual_start_feed: Option<usize>,
+    /// Whether a refresh operation is in progress
+    pub is_refreshing: bool,
 }
 
 impl App {
@@ -219,12 +236,51 @@ impl App {
             status_message: None,
             pending_key: None,
             rich_state: None,
+            read_history: Vec::new(),
+            history_position: 0,
+            selected_articles: HashSet::new(),
+            selected_feeds: HashSet::new(),
+            visual_start_article: None,
+            visual_start_feed: None,
+            is_refreshing: false,
         }
     }
 
     /// Get the currently selected feed
     pub fn current_feed(&self) -> Option<&Feed> {
         self.feeds.get(self.selected_feed)
+    }
+
+    /// Get the currently selected feed mutably
+    pub fn current_feed_mut(&mut self) -> Option<&mut Feed> {
+        self.feeds.get_mut(self.selected_feed)
+    }
+
+    /// Get feeds to display based on view mode
+    /// In UnreadOnly mode, feeds with errors are always shown (highlighted in red)
+    pub fn visible_feeds(&self) -> Vec<&Feed> {
+        match self.view_mode {
+            ViewMode::All => self.feeds.iter().collect(),
+            ViewMode::UnreadOnly => self
+                .feeds
+                .iter()
+                .filter(|f| f.unread_count > 0 || f.has_error())
+                .collect(),
+        }
+    }
+
+    /// Get the actual feed index from visible index
+    pub fn visible_to_actual_feed_index(&self, visible_idx: usize) -> Option<usize> {
+        let visible_feeds = self.visible_feeds();
+        visible_feeds
+            .get(visible_idx)
+            .and_then(|vf| self.feeds.iter().position(|f| f.id == vf.id))
+    }
+
+    /// Get the visible index from actual feed index
+    pub fn actual_to_visible_feed_index(&self, actual_idx: usize) -> Option<usize> {
+        let feed = self.feeds.get(actual_idx)?;
+        self.visible_feeds().iter().position(|f| f.id == feed.id)
     }
 
     /// Get the currently selected article
@@ -425,5 +481,120 @@ impl App {
         if let Some(&idx) = self.search_matches.first() {
             self.selected_article = idx;
         }
+    }
+
+    /// Record current position to history
+    pub fn push_history(&mut self) {
+        // If not at the end of history, truncate forward history
+        if self.history_position < self.read_history.len() {
+            self.read_history.truncate(self.history_position);
+        }
+
+        let entry = (self.selected_feed, self.selected_article);
+
+        // Avoid recording consecutive duplicates
+        if self.read_history.last() != Some(&entry) {
+            self.read_history.push(entry);
+            self.history_position = self.read_history.len();
+        }
+    }
+
+    /// Navigate back in history
+    pub fn history_back(&mut self) -> Option<(usize, usize)> {
+        if self.history_position > 1 {
+            self.history_position -= 1;
+            self.read_history.get(self.history_position - 1).copied()
+        } else {
+            None
+        }
+    }
+
+    /// Navigate forward in history
+    pub fn history_forward(&mut self) -> Option<(usize, usize)> {
+        if self.history_position < self.read_history.len() {
+            self.history_position += 1;
+            self.read_history.get(self.history_position - 1).copied()
+        } else {
+            None
+        }
+    }
+
+    // ========== Selection Methods ==========
+
+    /// Toggle article selection at given index
+    pub fn toggle_article_selection(&mut self, index: usize) {
+        if self.selected_articles.contains(&index) {
+            self.selected_articles.remove(&index);
+        } else {
+            self.selected_articles.insert(index);
+        }
+    }
+
+    /// Toggle feed selection at given index
+    pub fn toggle_feed_selection(&mut self, index: usize) {
+        if self.selected_feeds.contains(&index) {
+            self.selected_feeds.remove(&index);
+        } else {
+            self.selected_feeds.insert(index);
+        }
+    }
+
+    /// Clear article selection and exit visual mode
+    pub fn clear_article_selection(&mut self) {
+        self.selected_articles.clear();
+        self.visual_start_article = None;
+    }
+
+    /// Clear feed selection and exit visual mode
+    pub fn clear_feed_selection(&mut self) {
+        self.selected_feeds.clear();
+        self.visual_start_feed = None;
+    }
+
+    /// Update visual selection range for articles
+    pub fn update_visual_selection_articles(&mut self) {
+        if let Some(start) = self.visual_start_article {
+            let end = self.selected_article;
+            let (from, to) = if start <= end {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            self.selected_articles.clear();
+            for i in from..=to {
+                self.selected_articles.insert(i);
+            }
+        }
+    }
+
+    /// Update visual selection range for feeds
+    pub fn update_visual_selection_feeds(&mut self) {
+        if let Some(start) = self.visual_start_feed {
+            let end = self.selected_feed;
+            let (from, to) = if start <= end {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            self.selected_feeds.clear();
+            for i in from..=to {
+                self.selected_feeds.insert(i);
+            }
+        }
+    }
+
+    /// Check if currently in visual mode
+    pub fn is_visual_mode(&self) -> bool {
+        self.visual_start_article.is_some() || self.visual_start_feed.is_some()
+    }
+
+    /// Check if in visual mode for articles
+    pub fn is_visual_mode_articles(&self) -> bool {
+        self.visual_start_article.is_some()
+    }
+
+    /// Check if in visual mode for feeds
+    pub fn is_visual_mode_feeds(&self) -> bool {
+        self.visual_start_feed.is_some()
     }
 }

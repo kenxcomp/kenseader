@@ -4,7 +4,7 @@ use super::providers::{
     AiProvider, ClaudeApiProvider, ClaudeCliProvider, CliProvider, CliType,
     GeminiApiProvider, OpenAiProvider,
 };
-pub use super::providers::{ArticleForScoring, ArticleForSummary, BatchScoreResult, BatchSummaryResult};
+pub use super::providers::{ArticleForScoring, ArticleForSummary, ArticleStyleResult, BatchScoreResult, BatchSummaryResult};
 use crate::config::AppConfig;
 use crate::Result;
 
@@ -19,6 +19,7 @@ impl Summarizer {
     pub fn new(config: &AppConfig) -> Result<Self> {
         let language = &config.ai.summary_language;
         let summary_max_tokens = config.ai.max_summary_tokens.max(1);
+        let summary_max_length = config.ai.max_summary_length;
         let concurrency = config.ai.concurrency.max(1);
 
         let provider: Arc<dyn AiProvider> = match config.ai.provider.as_str() {
@@ -40,13 +41,13 @@ impl Summarizer {
             }
             // CLI-based providers
             "gemini_cli" => {
-                Arc::new(CliProvider::new(CliType::Gemini, language))
+                Arc::new(CliProvider::new(CliType::Gemini, language, summary_max_length))
             }
             "codex_cli" => {
-                Arc::new(CliProvider::new(CliType::Codex, language))
+                Arc::new(CliProvider::new(CliType::Codex, language, summary_max_length))
             }
             "claude_cli" | _ => {
-                Arc::new(ClaudeCliProvider::new(language))
+                Arc::new(ClaudeCliProvider::new(language, summary_max_length))
             }
         };
 
@@ -95,5 +96,10 @@ impl Summarizer {
     /// Get max concurrent summarization tasks
     pub fn concurrency(&self) -> usize {
         self.concurrency
+    }
+
+    /// Classify article style, tone, and length category
+    pub async fn classify_style(&self, content: &str) -> Result<ArticleStyleResult> {
+        self.provider.classify_style(content).await
     }
 }

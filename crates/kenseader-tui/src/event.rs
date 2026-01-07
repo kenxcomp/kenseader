@@ -24,6 +24,18 @@ pub enum ImageLoadResult {
     },
 }
 
+/// Result of an async refresh operation
+pub enum RefreshResult {
+    /// Refresh completed successfully
+    Success {
+        new_count: u32,
+    },
+    /// Refresh failed
+    Failure {
+        error: String,
+    },
+}
+
 impl EventHandler {
     pub fn new(tick_rate_ms: u64) -> Self {
         Self {

@@ -1,24 +1,47 @@
 use std::sync::Arc;
+use std::time::Duration;
 
+use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::ai::{ArticleForScoring, ArticleForSummary, Summarizer};
 use crate::config::AppConfig;
 use crate::feed::FeedFetcher;
 use crate::profile::{ProfileAnalyzer, TimeWindow};
-use crate::storage::{ArticleRepository, Database, FeedRepository};
+use crate::storage::{ArticleRepository, ArticleStyleRepository, Database, FeedRepository};
 use crate::Result;
 
-/// Refresh all feeds and fetch new articles
+/// Refresh feeds and fetch new articles
+/// Uses smart refresh: only refreshes feeds that haven't been fetched recently
 pub async fn refresh_all_feeds(db: &Database, config: &AppConfig) -> Result<u32> {
     let fetcher = FeedFetcher::new(config)?;
     let feed_repo = FeedRepository::new(db);
     let article_repo = ArticleRepository::new(db);
 
-    let feeds = feed_repo.list_all().await?;
-    let mut total_new = 0;
+    // Smart refresh: only get feeds that need refreshing
+    let feeds = if config.sync.feed_refresh_interval_secs > 0 {
+        let needs_refresh = feed_repo.list_needs_refresh(config.sync.feed_refresh_interval_secs).await?;
+        let total_feeds = feed_repo.count().await?;
+        if needs_refresh.is_empty() {
+            tracing::debug!("No feeds need refreshing (all {} feeds are up to date)", total_feeds);
+            return Ok(0);
+        }
+        tracing::info!(
+            "Smart refresh: {} of {} feeds need refreshing (interval: {} hours)",
+            needs_refresh.len(),
+            total_feeds,
+            config.sync.feed_refresh_interval_secs / 3600
+        );
+        needs_refresh
+    } else {
+        // feed_refresh_interval_secs = 0 means refresh all feeds every time
+        feed_repo.list_all().await?
+    };
 
-    for feed in feeds {
+    let mut total_new = 0;
+    let rate_limit = Duration::from_millis(config.sync.rate_limit_ms);
+
+    for (idx, feed) in feeds.iter().enumerate() {
         tracing::info!("Refreshing feed: {}", feed.local_name);
 
         match fetcher.fetch(&feed.url, feed.id).await {
@@ -42,6 +65,11 @@ pub async fn refresh_all_feeds(db: &Database, config: &AppConfig) -> Result<u32>
                 tracing::error!("Failed to fetch feed '{}': {}", feed.local_name, e);
                 feed_repo.update_fetch_error(feed.id, &e.to_string()).await?;
             }
+        }
+
+        // Apply rate limit between requests (skip delay after last feed)
+        if rate_limit.as_millis() > 0 && idx < feeds.len() - 1 {
+            sleep(rate_limit).await;
         }
     }
 
@@ -379,4 +407,66 @@ fn create_scoring_batches(
     }
 
     batches
+}
+
+/// Classify pending articles that have summaries but no style classification
+/// Stage 3 of the workflow: after scoring is complete
+pub async fn classify_pending_articles(
+    db: &Database,
+    summarizer: Arc<Summarizer>,
+    batch_size: usize,
+) -> Result<u32> {
+    let style_repo = ArticleStyleRepository::new(db);
+    let unclassified = style_repo.list_unclassified(batch_size as i64).await?;
+
+    if unclassified.is_empty() {
+        tracing::debug!("No articles pending style classification");
+        return Ok(0);
+    }
+
+    tracing::info!(
+        "Classifying {} articles for style/tone",
+        unclassified.len()
+    );
+
+    let mut classified = 0u32;
+
+    for article in unclassified {
+        // Use content for classification
+        let content = article.content.as_deref().unwrap_or(&article.title);
+
+        match summarizer.classify_style(content).await {
+            Ok(result) => {
+                if let Err(e) = style_repo.upsert(article.id, &result).await {
+                    tracing::warn!(
+                        "Failed to save style classification for article {}: {}",
+                        article.id,
+                        e
+                    );
+                    continue;
+                }
+                classified += 1;
+                tracing::debug!(
+                    "Classified article '{}': style={}, tone={}, length={}",
+                    article.title,
+                    result.style_type,
+                    result.tone,
+                    result.length_category
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to classify article '{}': {}",
+                    article.title,
+                    e
+                );
+            }
+        }
+    }
+
+    if classified > 0 {
+        tracing::info!("Classified {} articles", classified);
+    }
+
+    Ok(classified)
 }

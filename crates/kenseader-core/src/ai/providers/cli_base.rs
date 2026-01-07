@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use super::{AiProvider, ArticleForScoring, ArticleForSummary, BatchScoreResult, BatchSummaryResult};
+use super::{AiProvider, ArticleForScoring, ArticleForSummary, ArticleStyleResult, BatchScoreResult, BatchSummaryResult};
 use crate::{Error, Result};
 
 fn truncate_chars(input: &str, max_chars: usize) -> &str {
@@ -47,13 +47,15 @@ impl CliType {
 pub struct CliProvider {
     cli_type: CliType,
     language: String,
+    summary_max_length: usize,
 }
 
 impl CliProvider {
-    pub fn new(cli_type: CliType, language: &str) -> Self {
+    pub fn new(cli_type: CliType, language: &str, summary_max_length: usize) -> Self {
         Self {
             cli_type,
             language: language.to_string(),
+            summary_max_length,
         }
     }
 
@@ -137,12 +139,13 @@ impl AiProvider for CliProvider {
 
         let truncated = truncate_chars(content, 4000);
         let language = &self.language;
+        let max_len = self.summary_max_length;
 
         let prompt = format!(
-            "Below is the full text of an article. Summarize it in 2-3 sentences in {language}. \
+            "Below is the full text of an article. Summarize it in 2-3 sentences (max {max_len} characters) in {language}. \
 Do NOT try to fetch any URLs. Use ONLY the text provided below.\n\n\
 ---BEGIN ARTICLE TEXT---\n{truncated}\n---END ARTICLE TEXT---\n\n\
-Summary (in {language}):"
+Summary (in {language}, max {max_len} chars):"
         );
 
         let prompt_clone = prompt.clone();
@@ -150,7 +153,7 @@ Summary (in {language}):"
         let lang = self.language.clone();
 
         tokio::task::spawn_blocking(move || {
-            let provider = CliProvider::new(cli_type, &lang);
+            let provider = CliProvider::new(cli_type, &lang, max_len);
             provider.run_cli(&prompt_clone)
         })
         .await
@@ -176,9 +179,10 @@ Tags:"
         let prompt_clone = prompt.clone();
         let cli_type = self.cli_type;
         let lang = self.language.clone();
+        let max_len = self.summary_max_length;
 
         let result = tokio::task::spawn_blocking(move || {
-            let provider = CliProvider::new(cli_type, &lang);
+            let provider = CliProvider::new(cli_type, &lang, max_len);
             provider.run_cli(&prompt_clone)
         })
         .await
@@ -212,9 +216,10 @@ Respond with only a number from 0 to 100, where 0 means not relevant at all and 
         let prompt_clone = prompt.clone();
         let cli_type = self.cli_type;
         let lang = self.language.clone();
+        let max_len = self.summary_max_length;
 
         let result = tokio::task::spawn_blocking(move || {
-            let provider = CliProvider::new(cli_type, &lang);
+            let provider = CliProvider::new(cli_type, &lang, max_len);
             provider.run_cli(&prompt_clone)
         })
         .await
@@ -247,8 +252,9 @@ Respond with only a number from 0 to 100, where 0 means not relevant at all and 
         }
 
         let language = &self.language;
+        let max_len = self.summary_max_length;
         let mut prompt = format!(
-            "Below are multiple articles. For EACH article, provide a 2-3 sentence summary in {language}.\n\
+            "Below are multiple articles. For EACH article, provide a 2-3 sentence summary (max {max_len} characters) in {language}.\n\
 Do NOT fetch any URLs. Use ONLY the text provided.\n\
 Format your response EXACTLY as follows, with each summary on its own line:\n\
 [ARTICLE_ID]: summary text here\n\n"
@@ -263,7 +269,7 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         }
 
         prompt.push_str(&format!(
-            "Now provide summaries in {language} using the format [ARTICLE_ID]: summary\n"
+            "Now provide summaries in {language} (max {max_len} chars each) using the format [ARTICLE_ID]: summary\n"
         ));
 
         let prompt_clone = prompt;
@@ -271,7 +277,7 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         let lang = self.language.clone();
 
         let result = tokio::task::spawn_blocking(move || {
-            let provider = CliProvider::new(cli_type, &lang);
+            let provider = CliProvider::new(cli_type, &lang, max_len);
             provider.run_cli(&prompt_clone)
         })
         .await
@@ -360,9 +366,10 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         let prompt_clone = prompt;
         let cli_type = self.cli_type;
         let lang = self.language.clone();
+        let max_len = self.summary_max_length;
 
         let result = tokio::task::spawn_blocking(move || {
-            let provider = CliProvider::new(cli_type, &lang);
+            let provider = CliProvider::new(cli_type, &lang, max_len);
             provider.run_cli(&prompt_clone)
         })
         .await
@@ -409,5 +416,32 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
 
     fn min_content_length(&self) -> usize {
         1000
+    }
+
+    async fn classify_style(&self, content: &str) -> Result<ArticleStyleResult> {
+        let truncated = truncate_chars(content, 2000);
+
+        let prompt = format!(
+            "Classify this article's style. Respond with ONLY valid JSON (no markdown, no code blocks):\n\
+            {{\"style_type\": \"tutorial|news|opinion|analysis|review\", \"tone\": \"formal|casual|technical|humorous\", \"length_category\": \"short|medium|long\"}}\n\n\
+            Choose the most appropriate value for each field based on the article content.\n\n\
+            Article:\n{truncated}"
+        );
+
+        let prompt_clone = prompt;
+        let cli_type = self.cli_type;
+        let lang = self.language.clone();
+        let max_len = self.summary_max_length;
+
+        let result = tokio::task::spawn_blocking(move || {
+            let provider = CliProvider::new(cli_type, &lang, max_len);
+            provider.run_cli(&prompt_clone)
+        })
+        .await
+        .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
+
+        // Parse JSON response
+        let cleaned = result.trim().trim_matches(|c| c == '`' || c == '\n');
+        Ok(serde_json::from_str(cleaned).unwrap_or_else(|_| ArticleStyleResult::default()))
     }
 }

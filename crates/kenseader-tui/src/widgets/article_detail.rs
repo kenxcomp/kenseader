@@ -6,6 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Focus, RichArticleState};
 use crate::rich_content::{ContentElement, ImageState};
@@ -32,6 +33,10 @@ impl ArticleDetailWidget {
         let inner_area = block.inner(area);
         frame.render_widget(block, area);
 
+        // Get UI config options
+        let show_author = app.config.ui.show_author;
+        let show_timestamps = app.config.ui.show_timestamps;
+
         let content = if let Some(article) = app.current_article().cloned() {
             // Build content with rich rendering if available
             if let Some(ref mut rich_state) = app.rich_state {
@@ -40,9 +45,9 @@ impl ArticleDetailWidget {
                     rich_state.viewport_height = inner_area.height;
                     rich_state.calculate_heights(inner_area.width.saturating_sub(2));
                 }
-                Self::render_rich_content(&article, rich_state, inner_area.width.saturating_sub(2))
+                Self::render_rich_content(&article, rich_state, inner_area.width.saturating_sub(2), show_author, show_timestamps)
             } else {
-                Self::render_plain_content(&article, app)
+                Self::render_plain_content(&article, show_author, show_timestamps)
             }
         } else {
             Text::from(Line::from(Span::styled(
@@ -63,6 +68,8 @@ impl ArticleDetailWidget {
         article: &kenseader_core::feed::Article,
         rich_state: &mut RichArticleState,
         width: u16,
+        show_author: bool,
+        show_timestamps: bool,
     ) -> Text<'a> {
         let mut lines: Vec<Line<'a>> = Vec::new();
 
@@ -75,44 +82,34 @@ impl ArticleDetailWidget {
         )));
         lines.push(Line::from(""));
 
-        // Metadata
+        // Metadata (controlled by show_author and show_timestamps config)
         let mut meta_spans = Vec::new();
-        if let Some(author) = &article.author {
-            meta_spans.push(Span::styled(
-                format!("By {} ", author),
-                Style::default().fg(GruvboxMaterial::GREY2),
-            ));
+        if show_author {
+            if let Some(author) = &article.author {
+                meta_spans.push(Span::styled(
+                    format!("By {} ", author),
+                    Style::default().fg(GruvboxMaterial::GREY2),
+                ));
+            }
         }
-        if let Some(date) = &article.published_at {
-            meta_spans.push(Span::styled(
-                format!("| {}", date.format("%Y-%m-%d %H:%M")),
-                Style::default().fg(GruvboxMaterial::GREY1),
-            ));
+        if show_timestamps {
+            if let Some(date) = &article.published_at {
+                let separator = if meta_spans.is_empty() { "" } else { "| " };
+                meta_spans.push(Span::styled(
+                    format!("{}{}", separator, date.format("%Y-%m-%d %H:%M")),
+                    Style::default().fg(GruvboxMaterial::GREY1),
+                ));
+            }
         }
         if !meta_spans.is_empty() {
             lines.push(Line::from(meta_spans));
             lines.push(Line::from(""));
         }
 
-        // Summary (if available)
+        // Summary (if available) - render with box border
         if let Some(summary) = &article.summary {
-            lines.push(Line::from(Span::styled(
-                "Summary:",
-                Style::default()
-                    .fg(GruvboxMaterial::AQUA)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            for line in summary.lines() {
-                lines.push(Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default().fg(GruvboxMaterial::FG0),
-                )));
-            }
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "─".repeat(40.min(width as usize)),
-                Style::default().fg(GruvboxMaterial::GREY0),
-            )));
+            let summary_lines = render_summary_box(summary, width as usize);
+            lines.extend(summary_lines);
             lines.push(Line::from(""));
         }
 
@@ -278,7 +275,8 @@ impl ArticleDetailWidget {
     /// Fallback: render plain text content (when RichArticleState is not available)
     fn render_plain_content<'a>(
         article: &kenseader_core::feed::Article,
-        _app: &App,
+        show_author: bool,
+        show_timestamps: bool,
     ) -> Text<'a> {
         let mut lines = Vec::new();
 
@@ -291,44 +289,34 @@ impl ArticleDetailWidget {
         )));
         lines.push(Line::from(""));
 
-        // Metadata
+        // Metadata (controlled by show_author and show_timestamps config)
         let mut meta_spans = Vec::new();
-        if let Some(author) = &article.author {
-            meta_spans.push(Span::styled(
-                format!("By {} ", author),
-                Style::default().fg(GruvboxMaterial::GREY2),
-            ));
+        if show_author {
+            if let Some(author) = &article.author {
+                meta_spans.push(Span::styled(
+                    format!("By {} ", author),
+                    Style::default().fg(GruvboxMaterial::GREY2),
+                ));
+            }
         }
-        if let Some(date) = &article.published_at {
-            meta_spans.push(Span::styled(
-                format!("| {}", date.format("%Y-%m-%d %H:%M")),
-                Style::default().fg(GruvboxMaterial::GREY1),
-            ));
+        if show_timestamps {
+            if let Some(date) = &article.published_at {
+                let separator = if meta_spans.is_empty() { "" } else { "| " };
+                meta_spans.push(Span::styled(
+                    format!("{}{}", separator, date.format("%Y-%m-%d %H:%M")),
+                    Style::default().fg(GruvboxMaterial::GREY1),
+                ));
+            }
         }
         if !meta_spans.is_empty() {
             lines.push(Line::from(meta_spans));
             lines.push(Line::from(""));
         }
 
-        // Summary (if available)
+        // Summary (if available) - render with box border
         if let Some(summary) = &article.summary {
-            lines.push(Line::from(Span::styled(
-                "Summary:",
-                Style::default()
-                    .fg(GruvboxMaterial::AQUA)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            for line in summary.lines() {
-                lines.push(Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default().fg(GruvboxMaterial::FG0),
-                )));
-            }
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "────────────────────────────────────────",
-                Style::default().fg(GruvboxMaterial::GREY0),
-            )));
+            let summary_lines = render_summary_box(summary, 70); // Fixed width for plain content
+            lines.extend(summary_lines);
             lines.push(Line::from(""));
         }
 
@@ -436,11 +424,102 @@ impl ArticleDetailWidget {
     }
 }
 
-/// Truncate URL for display
+/// Truncate URL for display (UTF-8 safe)
 fn truncate_url(url: &str, max_len: usize) -> String {
-    if url.len() <= max_len {
+    if url.chars().count() <= max_len {
         url.to_string()
     } else {
-        format!("{}...", &url[..max_len.saturating_sub(3)])
+        let truncated: String = url.chars().take(max_len.saturating_sub(3)).collect();
+        format!("{}...", truncated)
     }
+}
+
+/// Render summary text in a styled box with proper unicode width handling
+fn render_summary_box<'a>(summary: &str, max_width: usize) -> Vec<Line<'a>> {
+    let border_color = GruvboxMaterial::AQUA;
+    let title = " AI Summary ";
+
+    // Box inner width (excluding border characters "│ " and " │")
+    let inner_width = max_width.saturating_sub(4).max(20);
+    // Total box width including borders
+    let box_width = inner_width + 2; // "│" + content + "│"
+
+    let mut lines: Vec<Line<'a>> = Vec::new();
+
+    // Top border: ╭─── AI Summary ───╮
+    let title_width = title.width();
+    let remaining = box_width.saturating_sub(title_width);
+    let left_dashes = remaining / 2;
+    let right_dashes = remaining - left_dashes;
+    lines.push(Line::from(vec![
+        Span::styled("╭", Style::default().fg(border_color)),
+        Span::styled("─".repeat(left_dashes), Style::default().fg(border_color)),
+        Span::styled(title, Style::default().fg(GruvboxMaterial::YELLOW).add_modifier(Modifier::BOLD)),
+        Span::styled("─".repeat(right_dashes), Style::default().fg(border_color)),
+        Span::styled("╮", Style::default().fg(border_color)),
+    ]));
+
+    // Wrap and render summary content
+    let wrapped_lines = wrap_text_unicode(summary, inner_width);
+    for content in wrapped_lines {
+        let content_width = content.width();
+        let padding = inner_width.saturating_sub(content_width);
+        lines.push(Line::from(vec![
+            Span::styled("│ ", Style::default().fg(border_color)),
+            Span::styled(content, Style::default().fg(GruvboxMaterial::FG0)),
+            Span::styled(" ".repeat(padding), Style::default().fg(GruvboxMaterial::FG0)),
+            Span::styled(" │", Style::default().fg(border_color)),
+        ]));
+    }
+
+    // Bottom border: ╰────────────────╯
+    lines.push(Line::from(vec![
+        Span::styled("╰", Style::default().fg(border_color)),
+        Span::styled("─".repeat(box_width), Style::default().fg(border_color)),
+        Span::styled("╯", Style::default().fg(border_color)),
+    ]));
+
+    lines
+}
+
+/// Wrap text respecting unicode character widths (CJK = 2 columns)
+fn wrap_text_unicode(text: &str, max_width: usize) -> Vec<String> {
+    let mut result = Vec::new();
+
+    for paragraph in text.lines() {
+        if paragraph.is_empty() {
+            result.push(String::new());
+            continue;
+        }
+
+        let mut current_line = String::new();
+        let mut current_width = 0;
+
+        for ch in paragraph.chars() {
+            let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+
+            if current_width + ch_width > max_width {
+                // Start new line
+                if !current_line.is_empty() {
+                    result.push(current_line);
+                }
+                current_line = String::new();
+                current_width = 0;
+            }
+
+            current_line.push(ch);
+            current_width += ch_width;
+        }
+
+        if !current_line.is_empty() {
+            result.push(current_line);
+        }
+    }
+
+    // Ensure at least one line
+    if result.is_empty() {
+        result.push(String::new());
+    }
+
+    result
 }

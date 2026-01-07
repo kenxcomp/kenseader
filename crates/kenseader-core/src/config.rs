@@ -149,6 +149,9 @@ pub struct SyncConfig {
     /// Auto-refresh interval in seconds (0 = disabled)
     #[serde(default = "default_refresh_interval")]
     pub refresh_interval_secs: u64,
+    /// Minimum seconds between refreshes for each feed (0 = no limit, refresh all feeds every time)
+    #[serde(default = "default_feed_refresh_interval")]
+    pub feed_refresh_interval_secs: u64,
     /// Cleanup interval in seconds (remove old articles)
     #[serde(default = "default_cleanup_interval")]
     pub cleanup_interval_secs: u64,
@@ -170,6 +173,7 @@ impl Default for SyncConfig {
     fn default() -> Self {
         Self {
             refresh_interval_secs: default_refresh_interval(),
+            feed_refresh_interval_secs: default_feed_refresh_interval(),
             cleanup_interval_secs: default_cleanup_interval(),
             summarize_interval_secs: default_summarize_interval(),
             filter_interval_secs: default_filter_interval(),
@@ -257,7 +261,11 @@ fn default_tick_rate() -> u64 {
 }
 
 fn default_refresh_interval() -> u64 {
-    300 // 5 minutes
+    3600 // 1 hour - scheduler check interval
+}
+
+fn default_feed_refresh_interval() -> u64 {
+    43200 // 12 hours - minimum interval between refreshes for each feed
 }
 
 fn default_cleanup_interval() -> u64 {
