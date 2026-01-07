@@ -197,6 +197,10 @@ pub struct App {
     pub pending_key: Option<char>,
     /// Rich content state for current article (replaces image_cache)
     pub rich_state: Option<RichArticleState>,
+    /// Reading history stack - stores (feed_index, article_index) tuples
+    pub read_history: Vec<(usize, usize)>,
+    /// Current position in history (1-indexed, 0 means empty)
+    pub history_position: usize,
 }
 
 impl App {
@@ -219,12 +223,46 @@ impl App {
             status_message: None,
             pending_key: None,
             rich_state: None,
+            read_history: Vec::new(),
+            history_position: 0,
         }
     }
 
     /// Get the currently selected feed
     pub fn current_feed(&self) -> Option<&Feed> {
         self.feeds.get(self.selected_feed)
+    }
+
+    /// Get the currently selected feed mutably
+    pub fn current_feed_mut(&mut self) -> Option<&mut Feed> {
+        self.feeds.get_mut(self.selected_feed)
+    }
+
+    /// Get feeds to display based on view mode
+    /// In UnreadOnly mode, feeds with errors are always shown (highlighted in red)
+    pub fn visible_feeds(&self) -> Vec<&Feed> {
+        match self.view_mode {
+            ViewMode::All => self.feeds.iter().collect(),
+            ViewMode::UnreadOnly => self
+                .feeds
+                .iter()
+                .filter(|f| f.unread_count > 0 || f.has_error())
+                .collect(),
+        }
+    }
+
+    /// Get the actual feed index from visible index
+    pub fn visible_to_actual_feed_index(&self, visible_idx: usize) -> Option<usize> {
+        let visible_feeds = self.visible_feeds();
+        visible_feeds
+            .get(visible_idx)
+            .and_then(|vf| self.feeds.iter().position(|f| f.id == vf.id))
+    }
+
+    /// Get the visible index from actual feed index
+    pub fn actual_to_visible_feed_index(&self, actual_idx: usize) -> Option<usize> {
+        let feed = self.feeds.get(actual_idx)?;
+        self.visible_feeds().iter().position(|f| f.id == feed.id)
     }
 
     /// Get the currently selected article
@@ -424,6 +462,42 @@ impl App {
         // Navigate to first match
         if let Some(&idx) = self.search_matches.first() {
             self.selected_article = idx;
+        }
+    }
+
+    /// Record current position to history
+    pub fn push_history(&mut self) {
+        // If not at the end of history, truncate forward history
+        if self.history_position < self.read_history.len() {
+            self.read_history.truncate(self.history_position);
+        }
+
+        let entry = (self.selected_feed, self.selected_article);
+
+        // Avoid recording consecutive duplicates
+        if self.read_history.last() != Some(&entry) {
+            self.read_history.push(entry);
+            self.history_position = self.read_history.len();
+        }
+    }
+
+    /// Navigate back in history
+    pub fn history_back(&mut self) -> Option<(usize, usize)> {
+        if self.history_position > 1 {
+            self.history_position -= 1;
+            self.read_history.get(self.history_position - 1).copied()
+        } else {
+            None
+        }
+    }
+
+    /// Navigate forward in history
+    pub fn history_forward(&mut self) -> Option<(usize, usize)> {
+        if self.history_position < self.read_history.len() {
+            self.history_position += 1;
+            self.read_history.get(self.history_position - 1).copied()
+        } else {
+            None
         }
     }
 }

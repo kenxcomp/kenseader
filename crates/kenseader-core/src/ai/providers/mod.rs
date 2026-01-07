@@ -43,6 +43,27 @@ pub struct BatchScoreResult {
     pub error: Option<String>,
 }
 
+/// Result of article style classification
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ArticleStyleResult {
+    /// Article style type: tutorial, news, opinion, analysis, review
+    pub style_type: String,
+    /// Article tone: formal, casual, technical, humorous
+    pub tone: String,
+    /// Article length category: short, medium, long
+    pub length_category: String,
+}
+
+impl Default for ArticleStyleResult {
+    fn default() -> Self {
+        Self {
+            style_type: "news".to_string(),
+            tone: "formal".to_string(),
+            length_category: "medium".to_string(),
+        }
+    }
+}
+
 /// Trait for AI summarization providers
 #[async_trait::async_trait]
 pub trait AiProvider: Send + Sync {
@@ -81,4 +102,7 @@ pub trait AiProvider: Send + Sync {
     fn min_content_length(&self) -> usize {
         1000
     }
+
+    /// Classify article style, tone, and length category
+    async fn classify_style(&self, content: &str) -> Result<ArticleStyleResult>;
 }

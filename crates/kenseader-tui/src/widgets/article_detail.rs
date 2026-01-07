@@ -32,6 +32,10 @@ impl ArticleDetailWidget {
         let inner_area = block.inner(area);
         frame.render_widget(block, area);
 
+        // Get UI config options
+        let show_author = app.config.ui.show_author;
+        let show_timestamps = app.config.ui.show_timestamps;
+
         let content = if let Some(article) = app.current_article().cloned() {
             // Build content with rich rendering if available
             if let Some(ref mut rich_state) = app.rich_state {
@@ -40,9 +44,9 @@ impl ArticleDetailWidget {
                     rich_state.viewport_height = inner_area.height;
                     rich_state.calculate_heights(inner_area.width.saturating_sub(2));
                 }
-                Self::render_rich_content(&article, rich_state, inner_area.width.saturating_sub(2))
+                Self::render_rich_content(&article, rich_state, inner_area.width.saturating_sub(2), show_author, show_timestamps)
             } else {
-                Self::render_plain_content(&article, app)
+                Self::render_plain_content(&article, show_author, show_timestamps)
             }
         } else {
             Text::from(Line::from(Span::styled(
@@ -63,6 +67,8 @@ impl ArticleDetailWidget {
         article: &kenseader_core::feed::Article,
         rich_state: &mut RichArticleState,
         width: u16,
+        show_author: bool,
+        show_timestamps: bool,
     ) -> Text<'a> {
         let mut lines: Vec<Line<'a>> = Vec::new();
 
@@ -75,19 +81,24 @@ impl ArticleDetailWidget {
         )));
         lines.push(Line::from(""));
 
-        // Metadata
+        // Metadata (controlled by show_author and show_timestamps config)
         let mut meta_spans = Vec::new();
-        if let Some(author) = &article.author {
-            meta_spans.push(Span::styled(
-                format!("By {} ", author),
-                Style::default().fg(GruvboxMaterial::GREY2),
-            ));
+        if show_author {
+            if let Some(author) = &article.author {
+                meta_spans.push(Span::styled(
+                    format!("By {} ", author),
+                    Style::default().fg(GruvboxMaterial::GREY2),
+                ));
+            }
         }
-        if let Some(date) = &article.published_at {
-            meta_spans.push(Span::styled(
-                format!("| {}", date.format("%Y-%m-%d %H:%M")),
-                Style::default().fg(GruvboxMaterial::GREY1),
-            ));
+        if show_timestamps {
+            if let Some(date) = &article.published_at {
+                let separator = if meta_spans.is_empty() { "" } else { "| " };
+                meta_spans.push(Span::styled(
+                    format!("{}{}", separator, date.format("%Y-%m-%d %H:%M")),
+                    Style::default().fg(GruvboxMaterial::GREY1),
+                ));
+            }
         }
         if !meta_spans.is_empty() {
             lines.push(Line::from(meta_spans));
@@ -278,7 +289,8 @@ impl ArticleDetailWidget {
     /// Fallback: render plain text content (when RichArticleState is not available)
     fn render_plain_content<'a>(
         article: &kenseader_core::feed::Article,
-        _app: &App,
+        show_author: bool,
+        show_timestamps: bool,
     ) -> Text<'a> {
         let mut lines = Vec::new();
 
@@ -291,19 +303,24 @@ impl ArticleDetailWidget {
         )));
         lines.push(Line::from(""));
 
-        // Metadata
+        // Metadata (controlled by show_author and show_timestamps config)
         let mut meta_spans = Vec::new();
-        if let Some(author) = &article.author {
-            meta_spans.push(Span::styled(
-                format!("By {} ", author),
-                Style::default().fg(GruvboxMaterial::GREY2),
-            ));
+        if show_author {
+            if let Some(author) = &article.author {
+                meta_spans.push(Span::styled(
+                    format!("By {} ", author),
+                    Style::default().fg(GruvboxMaterial::GREY2),
+                ));
+            }
         }
-        if let Some(date) = &article.published_at {
-            meta_spans.push(Span::styled(
-                format!("| {}", date.format("%Y-%m-%d %H:%M")),
-                Style::default().fg(GruvboxMaterial::GREY1),
-            ));
+        if show_timestamps {
+            if let Some(date) = &article.published_at {
+                let separator = if meta_spans.is_empty() { "" } else { "| " };
+                meta_spans.push(Span::styled(
+                    format!("{}{}", separator, date.format("%Y-%m-%d %H:%M")),
+                    Style::default().fg(GruvboxMaterial::GREY1),
+                ));
+            }
         }
         if !meta_spans.is_empty() {
             lines.push(Line::from(meta_spans));
@@ -436,11 +453,12 @@ impl ArticleDetailWidget {
     }
 }
 
-/// Truncate URL for display
+/// Truncate URL for display (UTF-8 safe)
 fn truncate_url(url: &str, max_len: usize) -> String {
-    if url.len() <= max_len {
+    if url.chars().count() <= max_len {
         url.to_string()
     } else {
-        format!("{}...", &url[..max_len.saturating_sub(3)])
+        let truncated: String = url.chars().take(max_len.saturating_sub(3)).collect();
+        format!("{}...", truncated)
     }
 }

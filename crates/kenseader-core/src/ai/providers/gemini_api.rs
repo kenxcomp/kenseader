@@ -2,7 +2,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use super::{AiProvider, ArticleForScoring, ArticleForSummary, BatchScoreResult, BatchSummaryResult};
+use super::{AiProvider, ArticleForScoring, ArticleForSummary, ArticleStyleResult, BatchScoreResult, BatchSummaryResult};
 use crate::{Error, Result};
 
 fn truncate_chars(input: &str, max_chars: usize) -> &str {
@@ -372,5 +372,22 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
 
     fn min_content_length(&self) -> usize {
         1000
+    }
+
+    async fn classify_style(&self, content: &str) -> Result<ArticleStyleResult> {
+        let truncated = truncate_chars(content, 2000);
+
+        let prompt = format!(
+            "Classify this article's style. Respond with ONLY valid JSON (no markdown, no code blocks):\n\
+            {{\"style_type\": \"tutorial|news|opinion|analysis|review\", \"tone\": \"formal|casual|technical|humorous\", \"length_category\": \"short|medium|long\"}}\n\n\
+            Choose the most appropriate value for each field based on the article content.\n\n\
+            Article:\n{truncated}"
+        );
+
+        let result = self.chat(&prompt, 100).await?;
+
+        // Parse JSON response
+        let cleaned = result.trim().trim_matches(|c| c == '`' || c == '\n');
+        Ok(serde_json::from_str(cleaned).unwrap_or_else(|_| ArticleStyleResult::default()))
     }
 }

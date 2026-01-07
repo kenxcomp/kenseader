@@ -207,10 +207,32 @@ async fn load_feeds(app: &mut App) -> Result<()> {
     app.feeds = app.client.list_feeds().await?;
 
     if !app.feeds.is_empty() {
+        // Ensure selected feed is valid for current view mode
+        ensure_valid_feed_selection(app);
         load_articles(app).await?;
     }
 
     Ok(())
+}
+
+/// Ensure selected feed is valid for current view mode
+fn ensure_valid_feed_selection(app: &mut App) {
+    let visible_feeds = app.visible_feeds();
+    if visible_feeds.is_empty() {
+        // No visible feeds, but keep selected_feed pointing to a valid feed if any exist
+        if !app.feeds.is_empty() && app.selected_feed >= app.feeds.len() {
+            app.selected_feed = 0;
+        }
+        return;
+    }
+
+    // Check if current selection is still visible
+    if app.actual_to_visible_feed_index(app.selected_feed).is_none() {
+        // Current feed is hidden, select first visible feed
+        if let Some(actual_idx) = app.visible_to_actual_feed_index(0) {
+            app.selected_feed = actual_idx;
+        }
+    }
 }
 
 async fn load_articles(app: &mut App) -> Result<()> {
@@ -292,6 +314,8 @@ async fn handle_action(
                 && app.focus == Focus::ArticleList
                 && matches!(app.view_mode, ViewMode::UnreadOnly)
             {
+                // Ensure feed selection is valid (feed may be hidden if all articles read)
+                ensure_valid_feed_selection(app);
                 load_articles_preserve_selection(app, true).await?;
                 // Re-initialize rich state since the article at the current index may have changed
                 init_rich_article_state(app, data_dir);
@@ -302,6 +326,8 @@ async fn handle_action(
             app.focus_right();
             // Auto mark-read when entering article detail
             if prev_focus == Focus::ArticleList && app.focus == Focus::ArticleDetail {
+                // Record history before entering article
+                app.push_history();
                 // Reset scroll to top (like vim 'gg')
                 app.detail_scroll = 0;
                 if let Some(article) = app.current_article() {
@@ -312,6 +338,10 @@ async fn handle_action(
                         if let Some(article) = app.current_article_mut() {
                             article.is_read = true;
                         }
+                        // Decrement feed unread count
+                        if let Some(feed) = app.current_feed_mut() {
+                            feed.unread_count = feed.unread_count.saturating_sub(1);
+                        }
                     }
                 }
                 // Initialize rich content state
@@ -321,7 +351,23 @@ async fn handle_action(
         Action::MoveUp => {
             let prev_feed = app.selected_feed;
             let prev_article = app.selected_article;
-            app.move_up();
+
+            // For Subscriptions, use visible feed navigation
+            if app.focus == Focus::Subscriptions {
+                let visible_feeds = app.visible_feeds();
+                if !visible_feeds.is_empty() {
+                    let current_visible = app
+                        .actual_to_visible_feed_index(app.selected_feed)
+                        .unwrap_or(0);
+                    let next_visible = current_visible.saturating_sub(1);
+                    if let Some(actual_idx) = app.visible_to_actual_feed_index(next_visible) {
+                        app.selected_feed = actual_idx;
+                    }
+                }
+            } else {
+                app.move_up();
+            }
+
             if app.focus == Focus::Subscriptions && prev_feed != app.selected_feed {
                 load_articles(app).await?;
                 // Initialize rich state for the first article in the new feed
@@ -337,7 +383,23 @@ async fn handle_action(
         Action::MoveDown => {
             let prev_feed = app.selected_feed;
             let prev_article = app.selected_article;
-            app.move_down();
+
+            // For Subscriptions, use visible feed navigation
+            if app.focus == Focus::Subscriptions {
+                let visible_feeds = app.visible_feeds();
+                if !visible_feeds.is_empty() {
+                    let current_visible = app
+                        .actual_to_visible_feed_index(app.selected_feed)
+                        .unwrap_or(0);
+                    let next_visible = (current_visible + 1).min(visible_feeds.len() - 1);
+                    if let Some(actual_idx) = app.visible_to_actual_feed_index(next_visible) {
+                        app.selected_feed = actual_idx;
+                    }
+                }
+            } else {
+                app.move_down();
+            }
+
             if app.focus == Focus::Subscriptions && prev_feed != app.selected_feed {
                 load_articles(app).await?;
                 // Initialize rich state for the first article in the new feed
@@ -377,6 +439,8 @@ async fn handle_action(
         }
         Action::Select => {
             if app.focus == Focus::ArticleList {
+                // Record history before entering article
+                app.push_history();
                 // Mark as read and switch to detail
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
@@ -385,6 +449,10 @@ async fn handle_action(
                         // Update local state without reloading (keeps article visible in unread-only mode)
                         if let Some(article) = app.current_article_mut() {
                             article.is_read = true;
+                        }
+                        // Decrement feed unread count
+                        if let Some(feed) = app.current_feed_mut() {
+                            feed.unread_count = feed.unread_count.saturating_sub(1);
                         }
                     }
                 }
@@ -446,6 +514,8 @@ async fn handle_action(
         }
         Action::ToggleUnreadOnly => {
             app.toggle_view_mode();
+            // Ensure selected feed is valid for new view mode
+            ensure_valid_feed_selection(app);
             load_articles(app).await?;
             init_rich_article_state(app, data_dir);
         }
@@ -510,6 +580,71 @@ async fn handle_action(
                     app.current_match + 1,
                     app.search_matches.len()
                 ));
+            }
+        }
+        Action::ToggleRead => {
+            // Toggle read/unread status for the current article
+            if let Some(article) = app.current_article() {
+                let article_id = article.id;
+                let was_read = article.is_read;
+
+                let result = if was_read {
+                    client.mark_unread(article_id).await
+                } else {
+                    client.mark_read(article_id).await
+                };
+
+                match result {
+                    Ok(_) => {
+                        // Update local article state
+                        if let Some(article) = app.current_article_mut() {
+                            article.is_read = !was_read;
+                        }
+                        // Update feed unread count
+                        if let Some(feed) = app.current_feed_mut() {
+                            if was_read {
+                                feed.unread_count += 1;
+                            } else {
+                                feed.unread_count = feed.unread_count.saturating_sub(1);
+                            }
+                        }
+                        let status = if was_read {
+                            "Marked as unread"
+                        } else {
+                            "Marked as read"
+                        };
+                        app.set_status(status);
+                    }
+                    Err(e) => {
+                        app.set_status(format!("Failed to toggle read status: {}", e));
+                    }
+                }
+            }
+        }
+        Action::HistoryBack => {
+            if let Some((feed_idx, article_idx)) = app.history_back() {
+                if feed_idx != app.selected_feed {
+                    app.selected_feed = feed_idx;
+                    load_articles(app).await?;
+                }
+                app.selected_article = article_idx;
+                app.detail_scroll = 0;
+                app.rich_state = None;
+                init_rich_article_state(app, data_dir);
+                app.set_status("← Back");
+            }
+        }
+        Action::HistoryForward => {
+            if let Some((feed_idx, article_idx)) = app.history_forward() {
+                if feed_idx != app.selected_feed {
+                    app.selected_feed = feed_idx;
+                    load_articles(app).await?;
+                }
+                app.selected_article = article_idx;
+                app.detail_scroll = 0;
+                app.rich_state = None;
+                init_rich_article_state(app, data_dir);
+                app.set_status("→ Forward");
             }
         }
         Action::None => {}

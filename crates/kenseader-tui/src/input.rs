@@ -27,6 +27,9 @@ pub enum Action {
     NextMatch,
     PrevMatch,
     ToggleUnreadOnly,
+    ToggleRead,      // Toggle article read/unread status
+    HistoryBack,     // Navigate to previous article in history
+    HistoryForward,  // Navigate to next article in history
     ExitMode,
     Confirm,
     Cancel,
@@ -97,10 +100,11 @@ pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
         (KeyCode::Char('s'), KeyModifiers::NONE) => Action::ToggleSaved,
         (KeyCode::Char('r'), KeyModifiers::NONE) => Action::Refresh,
 
-        // Delete (subscriptions only)
-        (KeyCode::Char('d'), KeyModifiers::NONE) if app.focus == Focus::Subscriptions => {
-            Action::Delete
-        }
+        // 'd' key: Delete feed in Subscriptions, Toggle read in ArticleList/Detail
+        (KeyCode::Char('d'), KeyModifiers::NONE) => match app.focus {
+            Focus::Subscriptions => Action::Delete,
+            Focus::ArticleList | Focus::ArticleDetail => Action::ToggleRead,
+        },
 
         // Search
         (KeyCode::Char('/'), KeyModifiers::NONE) => Action::StartSearchForward,
@@ -110,6 +114,11 @@ pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
 
         // View mode toggle
         (KeyCode::Char('i'), KeyModifiers::NONE) => Action::ToggleUnreadOnly,
+
+        // History navigation
+        (KeyCode::Char('u'), KeyModifiers::NONE) => Action::HistoryBack,
+        (KeyCode::Char('r'), KeyModifiers::CONTROL) => Action::HistoryForward,
+
         (KeyCode::Esc, KeyModifiers::NONE) => Action::ExitMode,
 
         _ => Action::None,
