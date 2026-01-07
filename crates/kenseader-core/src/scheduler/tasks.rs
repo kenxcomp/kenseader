@@ -11,13 +11,33 @@ use crate::profile::{ProfileAnalyzer, TimeWindow};
 use crate::storage::{ArticleRepository, ArticleStyleRepository, Database, FeedRepository};
 use crate::Result;
 
-/// Refresh all feeds and fetch new articles
+/// Refresh feeds and fetch new articles
+/// Uses smart refresh: only refreshes feeds that haven't been fetched recently
 pub async fn refresh_all_feeds(db: &Database, config: &AppConfig) -> Result<u32> {
     let fetcher = FeedFetcher::new(config)?;
     let feed_repo = FeedRepository::new(db);
     let article_repo = ArticleRepository::new(db);
 
-    let feeds = feed_repo.list_all().await?;
+    // Smart refresh: only get feeds that need refreshing
+    let feeds = if config.sync.feed_refresh_interval_secs > 0 {
+        let needs_refresh = feed_repo.list_needs_refresh(config.sync.feed_refresh_interval_secs).await?;
+        let total_feeds = feed_repo.count().await?;
+        if needs_refresh.is_empty() {
+            tracing::debug!("No feeds need refreshing (all {} feeds are up to date)", total_feeds);
+            return Ok(0);
+        }
+        tracing::info!(
+            "Smart refresh: {} of {} feeds need refreshing (interval: {} hours)",
+            needs_refresh.len(),
+            total_feeds,
+            config.sync.feed_refresh_interval_secs / 3600
+        );
+        needs_refresh
+    } else {
+        // feed_refresh_interval_secs = 0 means refresh all feeds every time
+        feed_repo.list_all().await?
+    };
+
     let mut total_new = 0;
     let rate_limit = Duration::from_millis(config.sync.rate_limit_ms);
 
