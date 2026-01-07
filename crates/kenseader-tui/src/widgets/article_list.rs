@@ -46,12 +46,21 @@ impl ArticleListWidget {
             .iter()
             .enumerate()
             .map(|(i, article)| {
+                // Selection marker (yazi-like)
+                let is_selected = app.selected_articles.contains(&i);
+                let select_marker = if is_selected { "✓" } else { " " };
+
                 let read_marker = if article.is_read { " " } else { "●" };
                 let saved_marker = if article.is_saved { "★" } else { " " };
 
                 let title = &article.title;
 
-                let base_style = if i == app.selected_article && is_focused {
+                // Style priority: selected > cursor > unread > read
+                let base_style = if is_selected {
+                    Style::default()
+                        .fg(GruvboxMaterial::FG0)
+                        .bg(GruvboxMaterial::PURPLE)
+                } else if i == app.selected_article && is_focused {
                     Style::default()
                         .fg(GruvboxMaterial::FG0)
                         .bg(GruvboxMaterial::SELECTION)
@@ -61,6 +70,11 @@ impl ArticleListWidget {
                     Style::default().fg(GruvboxMaterial::READ)
                 };
 
+                let select_style = if is_selected {
+                    Style::default().fg(GruvboxMaterial::GREEN)
+                } else {
+                    Style::default().fg(GruvboxMaterial::GREY1)
+                };
                 let marker_style = Style::default().fg(GruvboxMaterial::YELLOW);
                 let saved_style = Style::default().fg(GruvboxMaterial::ORANGE);
 
@@ -72,6 +86,7 @@ impl ArticleListWidget {
                 };
 
                 let mut spans = vec![
+                    Span::styled(select_marker, select_style),
                     Span::styled(read_marker, marker_style),
                     Span::styled(saved_marker, saved_style),
                     Span::raw(" "),

@@ -16,15 +16,40 @@ impl StatusBarWidget {
         // Check if in search mode - show search input prominently
         let is_search_mode = app.is_input_mode();
 
-        let mode_str = match &app.mode {
-            Mode::Normal => match app.view_mode {
-                ViewMode::All => "NORMAL",
-                ViewMode::UnreadOnly => "UNREAD",
-            },
-            Mode::SearchForward(_) => "SEARCH",
-            Mode::SearchBackward(_) => "SEARCH",
-            Mode::DeleteConfirm(_) => "DELETE? (y/n)",
-            Mode::Help => "HELP",
+        // Check visual mode and selection count
+        let is_visual = app.is_visual_mode();
+        let selection_count = match app.focus {
+            Focus::ArticleList | Focus::ArticleDetail => app.selected_articles.len(),
+            Focus::Subscriptions => app.selected_feeds.len(),
+        };
+
+        let mode_str = if app.is_refreshing {
+            "SYNCING"
+        } else {
+            match &app.mode {
+                Mode::Normal => {
+                    if is_visual {
+                        "VISUAL"
+                    } else {
+                        match app.view_mode {
+                            ViewMode::All => "NORMAL",
+                            ViewMode::UnreadOnly => "UNREAD",
+                        }
+                    }
+                }
+                Mode::SearchForward(_) => "SEARCH",
+                Mode::SearchBackward(_) => "SEARCH",
+                Mode::DeleteConfirm(_) => "CONFIRM",
+                Mode::BatchDeleteConfirm => "CONFIRM",
+                Mode::Help => "HELP",
+            }
+        };
+
+        // Selection info
+        let selection_info = if selection_count > 0 {
+            format!(" | Selected: {}", selection_count)
+        } else {
+            String::new()
         };
 
         let focus_str = match app.focus {
@@ -58,8 +83,8 @@ impl StatusBarWidget {
             msg.clone()
         } else {
             format!(
-                " {} | {} | Feeds: {} | Articles: {}",
-                mode_str, focus_str, feed_count, article_count
+                " {} | {} | Feeds: {} | Articles: {}{}",
+                mode_str, focus_str, feed_count, article_count, selection_info
             )
         };
 
@@ -93,4 +118,5 @@ impl StatusBarWidget {
         let paragraph = Paragraph::new(line);
         frame.render_widget(paragraph, area);
     }
+
 }

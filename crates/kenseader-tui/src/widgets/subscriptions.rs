@@ -37,6 +37,15 @@ impl SubscriptionsWidget {
             .iter()
             .enumerate()
             .map(|(i, feed)| {
+                // Get actual feed index to check selection
+                let actual_idx = app.visible_to_actual_feed_index(i);
+                let is_marked = actual_idx
+                    .map(|idx| app.selected_feeds.contains(&idx))
+                    .unwrap_or(false);
+
+                // Selection marker (yazi-like)
+                let select_marker = if is_marked { "✓" } else { " " };
+
                 let unread = if feed.unread_count > 0 {
                     format!(" ({})", feed.unread_count)
                 } else {
@@ -44,11 +53,16 @@ impl SubscriptionsWidget {
                 };
 
                 let name = &feed.local_name;
-                let is_selected = selected_visible_idx == Some(i);
+                let is_cursor = selected_visible_idx == Some(i);
 
                 // Determine style based on feed state
-                // Priority: selected > error > unread > read
-                let style = if is_selected && is_focused {
+                // Priority: marked > cursor > error > unread > read
+                let style = if is_marked {
+                    Style::default()
+                        .fg(GruvboxMaterial::FG0)
+                        .bg(GruvboxMaterial::PURPLE)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_cursor && is_focused {
                     Style::default()
                         .fg(GruvboxMaterial::FG0)
                         .bg(GruvboxMaterial::SELECTION)
@@ -62,10 +76,17 @@ impl SubscriptionsWidget {
                     Style::default().fg(GruvboxMaterial::READ)
                 };
 
+                let select_style = if is_marked {
+                    Style::default().fg(GruvboxMaterial::GREEN)
+                } else {
+                    Style::default().fg(GruvboxMaterial::GREY1)
+                };
+
                 // Add error indicator for feeds with errors
                 let error_indicator = if feed.has_error() { " !" } else { "" };
 
                 let line = Line::from(vec![
+                    Span::styled(select_marker, select_style),
                     Span::styled(name.clone(), style),
                     Span::styled(error_indicator, Style::default().fg(GruvboxMaterial::ERROR)),
                     Span::styled(unread, Style::default().fg(GruvboxMaterial::YELLOW)),

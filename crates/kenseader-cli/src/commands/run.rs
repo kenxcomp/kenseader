@@ -21,10 +21,10 @@ use kenseader_core::{
 };
 use kenseader_tui::{
     app::{App, Focus, Mode, RichArticleState, ViewMode},
-    event::{AppEvent, EventHandler, ImageLoadResult},
+    event::{AppEvent, EventHandler, ImageLoadResult, RefreshResult},
     input::{handle_key_event, Action},
     rich_content::download_image,
-    widgets::{ArticleDetailWidget, ArticleListWidget, StatusBarWidget, SubscriptionsWidget},
+    widgets::{ArticleDetailWidget, ArticleListWidget, PopupWidget, StatusBarWidget, SubscriptionsWidget},
 };
 
 pub async fn run(config: Arc<AppConfig>) -> Result<()> {
@@ -64,11 +64,19 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
     // Create channel for async image loading results
     let (img_tx, mut img_rx) = mpsc::unbounded_channel::<ImageLoadResult>();
 
+    // Create channel for async refresh results
+    let (refresh_tx, mut refresh_rx) = mpsc::unbounded_channel::<RefreshResult>();
+
     // Main loop
     loop {
         // Process any completed image loads (non-blocking)
         while let Ok(result) = img_rx.try_recv() {
             handle_image_result(&mut app, result);
+        }
+
+        // Process any completed refresh operations (non-blocking)
+        while let Ok(result) = refresh_rx.try_recv() {
+            handle_refresh_result(&mut app, result, &client, data_dir.as_ref()).await?;
         }
 
         // Check if we need to load more images (visible-first strategy)
@@ -113,6 +121,21 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
             ArticleListWidget::render(frame, columns[1], &app);
             ArticleDetailWidget::render(frame, columns[2], &mut app);
             StatusBarWidget::render(frame, main_layout[1], &app);
+
+            // Render popup dialogs on top (if in confirmation mode)
+            match &app.mode {
+                Mode::DeleteConfirm(_) => {
+                    let feed_name = app.current_feed()
+                        .map(|f| f.local_name.as_str())
+                        .unwrap_or("Unknown");
+                    PopupWidget::render_delete_confirm(frame, feed_name);
+                }
+                Mode::BatchDeleteConfirm => {
+                    let count = app.selected_feeds.len();
+                    PopupWidget::render_batch_delete_confirm(frame, count);
+                }
+                _ => {}
+            }
         })?;
 
         // Handle events
@@ -120,7 +143,7 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
             match event {
                 AppEvent::Key(key) => {
                     let action = handle_key_event(key, &app);
-                    handle_action(&mut app, action, &client, data_dir.as_ref()).await?;
+                    handle_action(&mut app, action, &client, data_dir.as_ref(), refresh_tx.clone()).await?;
                 }
                 AppEvent::Resize(_, _) => {
                     // Recalculate heights on resize
@@ -166,6 +189,34 @@ fn handle_image_result(app: &mut App, result: ImageLoadResult) {
             }
         }
     }
+}
+
+/// Handle completed refresh result
+async fn handle_refresh_result(
+    app: &mut App,
+    result: RefreshResult,
+    _client: &DaemonClient,
+    data_dir: Option<&PathBuf>,
+) -> Result<()> {
+    app.is_refreshing = false;
+
+    match result {
+        RefreshResult::Success { new_count } => {
+            // Reload data from daemon
+            load_feeds(app).await?;
+            init_rich_article_state(app, data_dir);
+            if new_count > 0 {
+                app.set_status(format!("Refreshed: {} new articles", new_count));
+            } else {
+                app.set_status("Refreshed: no new articles");
+            }
+        }
+        RefreshResult::Failure { error } => {
+            app.set_status(format!("Refresh failed: {}", error));
+        }
+    }
+
+    Ok(())
 }
 
 /// Spawn an async task to download an image
@@ -295,6 +346,7 @@ async fn handle_action(
     action: Action,
     client: &DaemonClient,
     data_dir: Option<&PathBuf>,
+    refresh_tx: mpsc::UnboundedSender<RefreshResult>,
 ) -> Result<()> {
     // Clear pending key on any action except PendingG
     if action != Action::PendingG && action != Action::JumpToTop {
@@ -364,8 +416,14 @@ async fn handle_action(
                         app.selected_feed = actual_idx;
                     }
                 }
+                // Update visual selection if in visual mode
+                app.update_visual_selection_feeds();
             } else {
                 app.move_up();
+                // Update visual selection if in visual mode (for ArticleList)
+                if matches!(app.focus, Focus::ArticleList | Focus::ArticleDetail) {
+                    app.update_visual_selection_articles();
+                }
             }
 
             if app.focus == Focus::Subscriptions && prev_feed != app.selected_feed {
@@ -396,8 +454,14 @@ async fn handle_action(
                         app.selected_feed = actual_idx;
                     }
                 }
+                // Update visual selection if in visual mode
+                app.update_visual_selection_feeds();
             } else {
                 app.move_down();
+                // Update visual selection if in visual mode (for ArticleList)
+                if matches!(app.focus, Focus::ArticleList | Focus::ArticleDetail) {
+                    app.update_visual_selection_articles();
+                }
             }
 
             if app.focus == Focus::Subscriptions && prev_feed != app.selected_feed {
@@ -414,25 +478,79 @@ async fn handle_action(
         }
         Action::ScrollHalfPageDown => {
             app.scroll_half_page_down();
+            // Update visual selection if in visual mode
+            match app.focus {
+                Focus::ArticleList | Focus::ArticleDetail => {
+                    app.update_visual_selection_articles();
+                }
+                Focus::Subscriptions => {
+                    app.update_visual_selection_feeds();
+                }
+            }
         }
         Action::ScrollHalfPageUp => {
             app.scroll_half_page_up();
+            // Update visual selection if in visual mode
+            match app.focus {
+                Focus::ArticleList | Focus::ArticleDetail => {
+                    app.update_visual_selection_articles();
+                }
+                Focus::Subscriptions => {
+                    app.update_visual_selection_feeds();
+                }
+            }
         }
         Action::ScrollPageDown => {
             // Full page = 2 half pages
             app.scroll_half_page_down();
             app.scroll_half_page_down();
+            // Update visual selection if in visual mode
+            match app.focus {
+                Focus::ArticleList | Focus::ArticleDetail => {
+                    app.update_visual_selection_articles();
+                }
+                Focus::Subscriptions => {
+                    app.update_visual_selection_feeds();
+                }
+            }
         }
         Action::ScrollPageUp => {
             app.scroll_half_page_up();
             app.scroll_half_page_up();
+            // Update visual selection if in visual mode
+            match app.focus {
+                Focus::ArticleList | Focus::ArticleDetail => {
+                    app.update_visual_selection_articles();
+                }
+                Focus::Subscriptions => {
+                    app.update_visual_selection_feeds();
+                }
+            }
         }
         Action::JumpToTop => {
             app.jump_to_top();
             app.clear_pending_key();
+            // Update visual selection if in visual mode
+            match app.focus {
+                Focus::ArticleList | Focus::ArticleDetail => {
+                    app.update_visual_selection_articles();
+                }
+                Focus::Subscriptions => {
+                    app.update_visual_selection_feeds();
+                }
+            }
         }
         Action::JumpToBottom => {
             app.jump_to_bottom();
+            // Update visual selection if in visual mode
+            match app.focus {
+                Focus::ArticleList | Focus::ArticleDetail => {
+                    app.update_visual_selection_articles();
+                }
+                Focus::Subscriptions => {
+                    app.update_visual_selection_feeds();
+                }
+            }
         }
         Action::PendingG => {
             app.pending_key = Some('g');
@@ -479,8 +597,12 @@ async fn handle_action(
             }
         }
         Action::Delete => {
-            if app.focus == Focus::Subscriptions {
+            // Batch delete takes priority if feeds are selected (regardless of current focus)
+            if !app.selected_feeds.is_empty() {
+                app.mode = Mode::BatchDeleteConfirm;
+            } else if app.focus == Focus::Subscriptions {
                 if let Some(feed) = app.current_feed() {
+                    // Single delete
                     app.mode = Mode::DeleteConfirm(feed.id);
                 }
             }
@@ -494,6 +616,37 @@ async fn handle_action(
                     load_feeds(app).await?;
                     init_rich_article_state(app, data_dir);
                     app.set_status("Feed deleted");
+                }
+                Mode::BatchDeleteConfirm => {
+                    // Batch delete selected feeds
+                    let indices: Vec<usize> = app.selected_feeds.iter().cloned().collect();
+                    let mut deleted_count = 0;
+                    let mut errors = Vec::new();
+
+                    for &idx in &indices {
+                        if let Some(feed) = app.feeds.get(idx) {
+                            let feed_id = feed.id;
+                            match client.delete_feed(feed_id).await {
+                                Ok(_) => {
+                                    deleted_count += 1;
+                                }
+                                Err(e) => {
+                                    errors.push(format!("{}", e));
+                                }
+                            }
+                        }
+                    }
+
+                    app.mode = Mode::Normal;
+                    app.clear_feed_selection();
+                    load_feeds(app).await?;
+                    init_rich_article_state(app, data_dir);
+
+                    if errors.is_empty() {
+                        app.set_status(format!("Deleted {} feeds", deleted_count));
+                    } else {
+                        app.set_status(format!("Deleted {} feeds, {} errors", deleted_count, errors.len()));
+                    }
                 }
                 Mode::SearchForward(_) | Mode::SearchBackward(_) => {
                     app.execute_search();
@@ -509,6 +662,11 @@ async fn handle_action(
             }
         }
         Action::Cancel => {
+            // Clear selected feeds when canceling batch delete
+            if matches!(app.mode, Mode::BatchDeleteConfirm) {
+                app.clear_feed_selection();
+                app.set_status("Batch delete canceled");
+            }
             app.mode = Mode::Normal;
             app.search_query.clear();
         }
@@ -544,22 +702,30 @@ async fn handle_action(
             app.execute_search();
         }
         Action::Refresh => {
-            app.set_status("Refreshing feeds...");
-            // Fetch new articles via daemon
-            match client.refresh(None).await {
-                Ok(new_count) => {
-                    // Reload data from daemon
-                    load_feeds(app).await?;
-                    init_rich_article_state(app, data_dir);
-                    if new_count > 0 {
-                        app.set_status(format!("Refreshed: {} new articles", new_count));
-                    } else {
-                        app.set_status("Refreshed: no new articles");
+            // Don't start another refresh if one is already in progress
+            if app.is_refreshing {
+                app.set_status("Refresh already in progress...");
+            } else {
+                app.is_refreshing = true;
+                app.set_status("Refreshing feeds...");
+
+                // Clone what we need for the spawned task
+                let client = app.client.clone();
+                let tx = refresh_tx.clone();
+
+                // Spawn refresh as background task
+                tokio::spawn(async move {
+                    match client.refresh(None).await {
+                        Ok(new_count) => {
+                            let _ = tx.send(RefreshResult::Success { new_count });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(RefreshResult::Failure {
+                                error: e.to_string(),
+                            });
+                        }
                     }
-                }
-                Err(e) => {
-                    app.set_status(format!("Refresh failed: {}", e));
-                }
+                });
             }
         }
         Action::NextMatch => {
@@ -583,40 +749,89 @@ async fn handle_action(
             }
         }
         Action::ToggleRead => {
-            // Toggle read/unread status for the current article
-            if let Some(article) = app.current_article() {
-                let article_id = article.id;
-                let was_read = article.is_read;
+            // Check for batch operation
+            if !app.selected_articles.is_empty() {
+                // Batch toggle read status
+                let indices: Vec<usize> = app.selected_articles.iter().cloned().collect();
+                let mut toggled_count = 0;
+                let mut errors = Vec::new();
 
-                let result = if was_read {
-                    client.mark_unread(article_id).await
-                } else {
-                    client.mark_read(article_id).await
-                };
+                for &idx in &indices {
+                    if let Some(article) = app.articles.get(idx) {
+                        let article_id = article.id;
+                        let was_read = article.is_read;
 
-                match result {
-                    Ok(_) => {
-                        // Update local article state
-                        if let Some(article) = app.current_article_mut() {
-                            article.is_read = !was_read;
-                        }
-                        // Update feed unread count
-                        if let Some(feed) = app.current_feed_mut() {
-                            if was_read {
-                                feed.unread_count += 1;
-                            } else {
-                                feed.unread_count = feed.unread_count.saturating_sub(1);
+                        let result = if was_read {
+                            client.mark_unread(article_id).await
+                        } else {
+                            client.mark_read(article_id).await
+                        };
+
+                        match result {
+                            Ok(_) => {
+                                // Update local state
+                                if let Some(article) = app.articles.get_mut(idx) {
+                                    article.is_read = !was_read;
+                                }
+                                // Update feed unread count
+                                if let Some(feed) = app.current_feed_mut() {
+                                    if was_read {
+                                        feed.unread_count += 1;
+                                    } else {
+                                        feed.unread_count = feed.unread_count.saturating_sub(1);
+                                    }
+                                }
+                                toggled_count += 1;
+                            }
+                            Err(e) => {
+                                errors.push(format!("{}", e));
                             }
                         }
-                        let status = if was_read {
-                            "Marked as unread"
-                        } else {
-                            "Marked as read"
-                        };
-                        app.set_status(status);
                     }
-                    Err(e) => {
-                        app.set_status(format!("Failed to toggle read status: {}", e));
+                }
+
+                app.clear_article_selection();
+                if errors.is_empty() {
+                    app.set_status(format!("Toggled {} articles", toggled_count));
+                } else {
+                    app.set_status(format!("Toggled {} articles, {} errors", toggled_count, errors.len()));
+                }
+            } else {
+                // Single article toggle (original behavior)
+                if let Some(article) = app.current_article() {
+                    let article_id = article.id;
+                    let was_read = article.is_read;
+
+                    let result = if was_read {
+                        client.mark_unread(article_id).await
+                    } else {
+                        client.mark_read(article_id).await
+                    };
+
+                    match result {
+                        Ok(_) => {
+                            // Update local article state
+                            if let Some(article) = app.current_article_mut() {
+                                article.is_read = !was_read;
+                            }
+                            // Update feed unread count
+                            if let Some(feed) = app.current_feed_mut() {
+                                if was_read {
+                                    feed.unread_count += 1;
+                                } else {
+                                    feed.unread_count = feed.unread_count.saturating_sub(1);
+                                }
+                            }
+                            let status = if was_read {
+                                "Marked as unread"
+                            } else {
+                                "Marked as read"
+                            };
+                            app.set_status(status);
+                        }
+                        Err(e) => {
+                            app.set_status(format!("Failed to toggle read status: {}", e));
+                        }
                     }
                 }
             }
@@ -646,6 +861,75 @@ async fn handle_action(
                 init_rich_article_state(app, data_dir);
                 app.set_status("→ Forward");
             }
+        }
+        Action::ToggleSelect => {
+            match app.focus {
+                Focus::ArticleList | Focus::ArticleDetail => {
+                    app.toggle_article_selection(app.selected_article);
+                    // Move to next item (if not at last item)
+                    if app.selected_article < app.articles.len().saturating_sub(1) {
+                        app.selected_article += 1;
+                        app.detail_scroll = 0;
+                        app.rich_state = None;
+                        init_rich_article_state(app, data_dir);
+                    }
+                }
+                Focus::Subscriptions => {
+                    // Get info before borrowing mutably
+                    let visible_len = app.visible_feeds().len();
+                    let visible_idx = app.actual_to_visible_feed_index(app.selected_feed);
+                    let current_feed = app.selected_feed;
+
+                    if let Some(visible_idx) = visible_idx {
+                        // Toggle selection using actual index
+                        app.toggle_feed_selection(current_feed);
+                        // Move to next item (if not at last item)
+                        if visible_idx < visible_len.saturating_sub(1) {
+                            let next_visible = visible_idx + 1;
+                            if let Some(actual_idx) = app.visible_to_actual_feed_index(next_visible) {
+                                app.selected_feed = actual_idx;
+                                load_articles(app).await?;
+                                init_rich_article_state(app, data_dir);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Action::VisualMode => {
+            match app.focus {
+                Focus::ArticleList | Focus::ArticleDetail => {
+                    if app.visual_start_article.is_some() {
+                        // Exit visual mode
+                        app.visual_start_article = None;
+                        app.set_status("Visual mode ended");
+                    } else {
+                        // Enter visual mode, record start position
+                        app.visual_start_article = Some(app.selected_article);
+                        app.selected_articles.clear();
+                        app.selected_articles.insert(app.selected_article);
+                        app.set_status("-- VISUAL --");
+                    }
+                }
+                Focus::Subscriptions => {
+                    if app.visual_start_feed.is_some() {
+                        // Exit visual mode
+                        app.visual_start_feed = None;
+                        app.set_status("Visual mode ended");
+                    } else {
+                        // Enter visual mode, record start position
+                        app.visual_start_feed = Some(app.selected_feed);
+                        app.selected_feeds.clear();
+                        app.selected_feeds.insert(app.selected_feed);
+                        app.set_status("-- VISUAL --");
+                    }
+                }
+            }
+        }
+        Action::ClearSelection => {
+            app.clear_article_selection();
+            app.clear_feed_selection();
+            app.set_status("Selection cleared");
         }
         Action::None => {}
     }

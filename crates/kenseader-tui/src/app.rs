@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -155,8 +156,10 @@ pub enum Mode {
     SearchForward(String),
     /// Search mode (backward)
     SearchBackward(String),
-    /// Delete confirmation
+    /// Delete confirmation (single feed)
     DeleteConfirm(Uuid),
+    /// Batch delete confirmation (multiple feeds)
+    BatchDeleteConfirm,
     /// Help overlay
     Help,
 }
@@ -201,6 +204,16 @@ pub struct App {
     pub read_history: Vec<(usize, usize)>,
     /// Current position in history (1-indexed, 0 means empty)
     pub history_position: usize,
+    /// Selected article indices (for batch operations)
+    pub selected_articles: HashSet<usize>,
+    /// Selected feed indices (for batch operations)
+    pub selected_feeds: HashSet<usize>,
+    /// Visual mode start position for articles (None = not in visual mode)
+    pub visual_start_article: Option<usize>,
+    /// Visual mode start position for feeds (None = not in visual mode)
+    pub visual_start_feed: Option<usize>,
+    /// Whether a refresh operation is in progress
+    pub is_refreshing: bool,
 }
 
 impl App {
@@ -225,6 +238,11 @@ impl App {
             rich_state: None,
             read_history: Vec::new(),
             history_position: 0,
+            selected_articles: HashSet::new(),
+            selected_feeds: HashSet::new(),
+            visual_start_article: None,
+            visual_start_feed: None,
+            is_refreshing: false,
         }
     }
 
@@ -499,5 +517,84 @@ impl App {
         } else {
             None
         }
+    }
+
+    // ========== Selection Methods ==========
+
+    /// Toggle article selection at given index
+    pub fn toggle_article_selection(&mut self, index: usize) {
+        if self.selected_articles.contains(&index) {
+            self.selected_articles.remove(&index);
+        } else {
+            self.selected_articles.insert(index);
+        }
+    }
+
+    /// Toggle feed selection at given index
+    pub fn toggle_feed_selection(&mut self, index: usize) {
+        if self.selected_feeds.contains(&index) {
+            self.selected_feeds.remove(&index);
+        } else {
+            self.selected_feeds.insert(index);
+        }
+    }
+
+    /// Clear article selection and exit visual mode
+    pub fn clear_article_selection(&mut self) {
+        self.selected_articles.clear();
+        self.visual_start_article = None;
+    }
+
+    /// Clear feed selection and exit visual mode
+    pub fn clear_feed_selection(&mut self) {
+        self.selected_feeds.clear();
+        self.visual_start_feed = None;
+    }
+
+    /// Update visual selection range for articles
+    pub fn update_visual_selection_articles(&mut self) {
+        if let Some(start) = self.visual_start_article {
+            let end = self.selected_article;
+            let (from, to) = if start <= end {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            self.selected_articles.clear();
+            for i in from..=to {
+                self.selected_articles.insert(i);
+            }
+        }
+    }
+
+    /// Update visual selection range for feeds
+    pub fn update_visual_selection_feeds(&mut self) {
+        if let Some(start) = self.visual_start_feed {
+            let end = self.selected_feed;
+            let (from, to) = if start <= end {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            self.selected_feeds.clear();
+            for i in from..=to {
+                self.selected_feeds.insert(i);
+            }
+        }
+    }
+
+    /// Check if currently in visual mode
+    pub fn is_visual_mode(&self) -> bool {
+        self.visual_start_article.is_some() || self.visual_start_feed.is_some()
+    }
+
+    /// Check if in visual mode for articles
+    pub fn is_visual_mode_articles(&self) -> bool {
+        self.visual_start_article.is_some()
+    }
+
+    /// Check if in visual mode for feeds
+    pub fn is_visual_mode_feeds(&self) -> bool {
+        self.visual_start_feed.is_some()
     }
 }
