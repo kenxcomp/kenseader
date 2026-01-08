@@ -50,12 +50,16 @@ impl ArticleListWidget {
                 let is_selected = app.selected_articles.contains(&i);
                 let select_marker = if is_selected { "✓" } else { " " };
 
+                // Search match marker
+                let is_search_match = app.search_matches.contains(&i);
+                let match_marker = if is_search_match { "*" } else { " " };
+
                 let read_marker = if article.is_read { " " } else { "●" };
                 let saved_marker = if article.is_saved { "★" } else { " " };
 
                 let title = &article.title;
 
-                // Style priority: selected > cursor > unread > read
+                // Style priority: selected > cursor > search_match > unread > read
                 let base_style = if is_selected {
                     Style::default()
                         .fg(GruvboxMaterial::FG0)
@@ -64,6 +68,11 @@ impl ArticleListWidget {
                     Style::default()
                         .fg(GruvboxMaterial::FG0)
                         .bg(GruvboxMaterial::SELECTION)
+                } else if is_search_match {
+                    // Subtle highlight for search matches
+                    Style::default()
+                        .fg(GruvboxMaterial::FG0)
+                        .bg(GruvboxMaterial::BG3)
                 } else if !article.is_read {
                     Style::default().fg(GruvboxMaterial::UNREAD)
                 } else {
@@ -85,8 +94,15 @@ impl ArticleListWidget {
                     vec![Span::styled(title.clone(), base_style)]
                 };
 
+                let match_style = if is_search_match {
+                    Style::default().fg(GruvboxMaterial::YELLOW)
+                } else {
+                    Style::default().fg(GruvboxMaterial::GREY1)
+                };
+
                 let mut spans = vec![
                     Span::styled(select_marker, select_style),
+                    Span::styled(match_marker, match_style),
                     Span::styled(read_marker, marker_style),
                     Span::styled(saved_marker, saved_style),
                     Span::raw(" "),

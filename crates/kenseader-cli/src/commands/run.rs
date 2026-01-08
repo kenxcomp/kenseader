@@ -99,6 +99,8 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
         // Draw UI
         terminal.draw(|frame| {
             let size = frame.area();
+            // Update viewport height for adaptive scrolling
+            app.viewport_height = size.height;
 
             // Check if we're in fullscreen image viewer mode
             if let Mode::ImageViewer(image_index) = app.mode {
@@ -159,7 +161,8 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
                     }
                 }
                 AppEvent::Tick => {
-                    // Periodic updates handled above
+                    // Tick spinner animation for loading indicator
+                    app.tick_spinner();
                 }
             }
         }
@@ -529,9 +532,8 @@ async fn handle_action(
             }
         }
         Action::ScrollPageDown => {
-            // Full page = 2 half pages
-            app.scroll_half_page_down();
-            app.scroll_half_page_down();
+            // Full page scroll using viewport height
+            app.scroll_full_page_down();
             // Update visual selection if in visual mode
             match app.focus {
                 Focus::ArticleList | Focus::ArticleDetail => {
@@ -543,8 +545,8 @@ async fn handle_action(
             }
         }
         Action::ScrollPageUp => {
-            app.scroll_half_page_up();
-            app.scroll_half_page_up();
+            // Full page scroll using viewport height
+            app.scroll_full_page_up();
             // Update visual selection if in visual mode
             match app.focus {
                 Focus::ArticleList | Focus::ArticleDetail => {

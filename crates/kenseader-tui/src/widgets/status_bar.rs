@@ -23,25 +23,27 @@ impl StatusBarWidget {
             Focus::Subscriptions => app.selected_feeds.len(),
         };
 
-        let mode_str = if app.is_refreshing {
-            "SYNCING"
+        let mode_str: String = if app.is_refreshing {
+            // Show animated spinner with SYNCING text
+            format!("{} SYNCING", app.current_spinner())
         } else {
             match &app.mode {
                 Mode::Normal => {
                     if is_visual {
-                        "VISUAL"
+                        "VISUAL".to_string()
                     } else {
                         match app.view_mode {
-                            ViewMode::All => "NORMAL",
-                            ViewMode::UnreadOnly => "UNREAD",
+                            ViewMode::All => "NORMAL".to_string(),
+                            ViewMode::UnreadOnly => "UNREAD".to_string(),
                         }
                     }
                 }
-                Mode::SearchForward(_) => "SEARCH",
-                Mode::SearchBackward(_) => "SEARCH",
-                Mode::DeleteConfirm(_) => "CONFIRM",
-                Mode::BatchDeleteConfirm => "CONFIRM",
-                Mode::Help => "HELP",
+                Mode::SearchForward(_) => "SEARCH".to_string(),
+                Mode::SearchBackward(_) => "SEARCH".to_string(),
+                Mode::DeleteConfirm(_) => "CONFIRM".to_string(),
+                Mode::BatchDeleteConfirm => "CONFIRM".to_string(),
+                Mode::Help => "HELP".to_string(),
+                Mode::ImageViewer(_) => "IMAGE".to_string(),
             }
         };
 
