@@ -1,8 +1,9 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
+use anyhow::Result;
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use image::DynamicImage;
-use anyhow::Result;
 
 /// Event handler for terminal events
 pub struct EventHandler {
@@ -16,6 +17,8 @@ pub enum ImageLoadResult {
         url: String,
         image: DynamicImage,
         bytes: Vec<u8>,
+        /// Path to the cached image file on disk
+        cache_path: Option<PathBuf>,
     },
     /// Image failed to load
     Failure {

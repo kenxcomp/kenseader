@@ -33,6 +33,12 @@ pub enum Action {
     ToggleSelect,     // Space: toggle selection and move to next
     VisualMode,       // 'v': enter/exit visual selection mode
     ClearSelection,   // Esc: clear selection
+    // Image navigation and viewing
+    OpenImage,        // 'o': open image in external viewer
+    ViewImage,        // Enter: enter fullscreen image viewer
+    NextImage,        // Tab/n: focus/navigate to next image
+    PrevImage,        // Shift+Tab/p: focus/navigate to previous image
+    ExitImageViewer,  // q/Esc: exit fullscreen image viewer
     ExitMode,
     Confirm,
     Cancel,
@@ -55,6 +61,7 @@ pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
             // Any key exits help
             return Action::ExitMode;
         }
+        Mode::ImageViewer(_) => return handle_image_viewer_mode(key),
         _ => {}
     }
 
@@ -93,12 +100,29 @@ pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
         }
         (KeyCode::Char('G'), KeyModifiers::SHIFT) => Action::JumpToBottom,
 
-        // Selection
-        (KeyCode::Enter, KeyModifiers::NONE) => Action::Select,
+        // Selection / Image viewer
+        (KeyCode::Enter, KeyModifiers::NONE) => {
+            if app.focus == Focus::ArticleDetail {
+                // In ArticleDetail, Enter opens fullscreen image viewer
+                Action::ViewImage
+            } else {
+                Action::Select
+            }
+        }
 
         // Article actions
         (KeyCode::Char('b'), KeyModifiers::NONE) if app.focus == Focus::ArticleDetail => {
             Action::OpenInBrowser
+        }
+        // Image navigation (ArticleDetail)
+        (KeyCode::Char('o'), KeyModifiers::NONE) if app.focus == Focus::ArticleDetail => {
+            Action::OpenImage
+        }
+        (KeyCode::Tab, KeyModifiers::NONE) if app.focus == Focus::ArticleDetail => {
+            Action::NextImage
+        }
+        (KeyCode::BackTab, KeyModifiers::SHIFT) if app.focus == Focus::ArticleDetail => {
+            Action::PrevImage
         }
         (KeyCode::Char('s'), KeyModifiers::NONE) => Action::ToggleSaved,
         (KeyCode::Char('r'), KeyModifiers::NONE) => Action::Refresh,
@@ -165,6 +189,27 @@ fn handle_confirm_mode(key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Action::Confirm,
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Action::Cancel,
+        _ => Action::None,
+    }
+}
+
+/// Handle key events in fullscreen image viewer mode
+fn handle_image_viewer_mode(key: KeyEvent) -> Action {
+    match (key.code, key.modifiers) {
+        // Exit image viewer
+        (KeyCode::Char('q'), KeyModifiers::NONE) => Action::ExitImageViewer,
+        (KeyCode::Esc, KeyModifiers::NONE) => Action::ExitImageViewer,
+        // Navigate images
+        (KeyCode::Char('n'), KeyModifiers::NONE) => Action::NextImage,
+        (KeyCode::Char('l'), KeyModifiers::NONE) => Action::NextImage,
+        (KeyCode::Right, KeyModifiers::NONE) => Action::NextImage,
+        (KeyCode::Char(' '), KeyModifiers::NONE) => Action::NextImage,
+        (KeyCode::Char('p'), KeyModifiers::NONE) => Action::PrevImage,
+        (KeyCode::Char('h'), KeyModifiers::NONE) => Action::PrevImage,
+        (KeyCode::Left, KeyModifiers::NONE) => Action::PrevImage,
+        // Open in external viewer
+        (KeyCode::Char('o'), KeyModifiers::NONE) => Action::OpenImage,
+        (KeyCode::Enter, KeyModifiers::NONE) => Action::OpenImage,
         _ => Action::None,
     }
 }
