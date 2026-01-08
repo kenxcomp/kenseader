@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use image::DynamicImage;
-use ratatui_image::picker::Picker;
-use ratatui_image::protocol::Protocol;
+use ratatui_image::picker::{Picker, ProtocolType};
+use ratatui_image::protocol::StatefulProtocol;
 
 const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
@@ -14,9 +14,16 @@ pub fn get_image_picker() -> &'static Picker {
     PICKER.get_or_init(|| {
         // Try to query terminal capabilities for best protocol
         // Falls back to halfblocks if query fails
-        Picker::from_query_stdio().unwrap_or_else(|_| {
-            Picker::from_fontsize((8, 16))
-        })
+        Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((8, 16)))
+    })
+}
+
+/// Check if the terminal supports graphics protocols (not just halfblocks)
+pub fn supports_graphics_protocol() -> bool {
+    static SUPPORTS_GRAPHICS: OnceLock<bool> = OnceLock::new();
+    *SUPPORTS_GRAPHICS.get_or_init(|| {
+        let picker = get_image_picker();
+        !matches!(picker.protocol_type(), ProtocolType::Halfblocks)
     })
 }
 
@@ -24,32 +31,35 @@ pub fn get_image_picker() -> &'static Picker {
 pub struct CachedImageData {
     /// The raw image data
     pub image: DynamicImage,
-    /// The protocol-specific rendered data (cached)
-    pub protocol: Option<Protocol>,
+    /// The stateful protocol for StatefulImage rendering
+    pub protocol: Option<StatefulProtocol>,
+    /// Disk cache path for external viewer fallback
+    pub cache_path: Option<PathBuf>,
 }
 
 impl CachedImageData {
-    pub fn new(image: DynamicImage) -> Self {
+    pub fn new(image: DynamicImage, cache_path: Option<PathBuf>) -> Self {
         Self {
             image,
             protocol: None,
+            cache_path,
         }
     }
 
-    /// Get the protocol for rendering, generating it if necessary
-    /// Creates a new Picker each time since the global one is immutable
-    pub fn get_protocol(&mut self, area: ratatui::layout::Rect) -> &mut Protocol {
+    /// Initialize the StatefulProtocol using a new picker
+    /// This should be called after the image is loaded
+    pub fn init_protocol(&mut self) {
         if self.protocol.is_none() {
-            // Create a new picker for this operation
-            let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| {
-                Picker::from_fontsize((8, 16))
-            });
-            self.protocol = Some(picker.new_protocol(
-                self.image.clone(),
-                area,
-                ratatui_image::Resize::Fit(None),
-            ).unwrap());
+            // Create a new picker for this protocol (new_resize_protocol requires &mut self)
+            let mut picker = Picker::from_query_stdio()
+                .unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
+            self.protocol = Some(picker.new_resize_protocol(self.image.clone()));
         }
+    }
+
+    /// Get or initialize the protocol for rendering
+    pub fn get_protocol(&mut self) -> &mut StatefulProtocol {
+        self.init_protocol();
         self.protocol.as_mut().unwrap()
     }
 }
@@ -556,9 +566,14 @@ impl ArticleImageCache {
         }
     }
 
-    /// Set image as loaded
-    pub fn set_loaded(&mut self, url: &str, image: DynamicImage) {
-        self.images.insert(url.to_string(), ImageState::Loaded(CachedImageData::new(image)));
+    /// Set image as loaded with optional cache path
+    pub fn set_loaded(&mut self, url: &str, image: DynamicImage, cache_path: Option<PathBuf>) {
+        let cached = CachedImageData::new(image, cache_path);
+        // Note: We no longer pre-initialize StatefulProtocol as it can cause
+        // ghost images in Kitty terminal. Images are rendered using halfblocks
+        // or native protocol implementations.
+        self.images
+            .insert(url.to_string(), ImageState::Loaded(cached));
     }
 
     /// Set image as failed
@@ -570,11 +585,19 @@ impl ArticleImageCache {
     pub fn try_load_from_disk(&mut self, url: &str) -> bool {
         if let Some(ref disk) = self.disk_cache {
             if let Some(img) = disk.load(url) {
-                self.images.insert(url.to_string(), ImageState::Loaded(CachedImageData::new(img)));
+                let cache_path = Some(disk.cache_path(url));
+                let cached = CachedImageData::new(img, cache_path);
+                self.images
+                    .insert(url.to_string(), ImageState::Loaded(cached));
                 return true;
             }
         }
         false
+    }
+
+    /// Get the disk cache path for a URL
+    pub fn get_cache_path(&self, url: &str) -> Option<PathBuf> {
+        self.disk_cache.as_ref().map(|d| d.cache_path(url))
     }
 
     /// Save to disk cache

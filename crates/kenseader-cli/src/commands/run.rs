@@ -24,7 +24,10 @@ use kenseader_tui::{
     event::{AppEvent, EventHandler, ImageLoadResult, RefreshResult},
     input::{handle_key_event, Action},
     rich_content::download_image,
-    widgets::{ArticleDetailWidget, ArticleListWidget, PopupWidget, StatusBarWidget, SubscriptionsWidget},
+    widgets::{
+        ArticleDetailWidget, ArticleListWidget, ImageViewerWidget, PopupWidget, StatusBarWidget,
+        SubscriptionsWidget,
+    },
 };
 
 pub async fn run(config: Arc<AppConfig>) -> Result<()> {
@@ -97,22 +100,25 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
         terminal.draw(|frame| {
             let size = frame.area();
 
+            // Check if we're in fullscreen image viewer mode
+            if let Mode::ImageViewer(image_index) = app.mode {
+                ImageViewerWidget::render(frame, size, &mut app, image_index);
+                return;
+            }
+
             // Main layout: content + status bar
             let main_layout = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(1),
-                    Constraint::Length(1),
-                ])
+                .constraints([Constraint::Min(1), Constraint::Length(1)])
                 .split(size);
 
             // Three-column layout with 1:4:5 ratio
             let columns = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Ratio(1, 10),  // Subscriptions
-                    Constraint::Ratio(4, 10),  // Article list
-                    Constraint::Ratio(5, 10),  // Article detail
+                    Constraint::Ratio(1, 10), // Subscriptions
+                    Constraint::Ratio(4, 10), // Article list
+                    Constraint::Ratio(5, 10), // Article detail
                 ])
                 .split(main_layout[0]);
 
@@ -125,7 +131,8 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
             // Render popup dialogs on top (if in confirmation mode)
             match &app.mode {
                 Mode::DeleteConfirm(_) => {
-                    let feed_name = app.current_feed()
+                    let feed_name = app
+                        .current_feed()
                         .map(|f| f.local_name.as_str())
                         .unwrap_or("Unknown");
                     PopupWidget::render_delete_confirm(frame, feed_name);
@@ -178,11 +185,18 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
 fn handle_image_result(app: &mut App, result: ImageLoadResult) {
     if let Some(ref mut rich_state) = app.rich_state {
         match result {
-            ImageLoadResult::Success { url, image, bytes } => {
-                // Save to disk cache
-                rich_state.image_cache.save_to_disk(&url, &bytes);
-                // Store in memory cache
-                rich_state.image_cache.set_loaded(&url, image);
+            ImageLoadResult::Success {
+                url,
+                image,
+                bytes,
+                cache_path,
+            } => {
+                // Save to disk cache if we have bytes
+                if !bytes.is_empty() {
+                    rich_state.image_cache.save_to_disk(&url, &bytes);
+                }
+                // Store in memory cache with cache path
+                rich_state.image_cache.set_loaded(&url, image, cache_path);
             }
             ImageLoadResult::Failure { url, error } => {
                 rich_state.image_cache.set_failed(&url, error);
@@ -231,10 +245,12 @@ fn spawn_image_load(
         let disk_cache = kenseader_tui::rich_content::ImageDiskCache::new(dir);
         if let Ok(disk_cache) = disk_cache {
             if let Some(img) = disk_cache.load(&url) {
+                let cache_path = Some(disk_cache.cache_path(&url));
                 let _ = tx.send(ImageLoadResult::Success {
                     url,
                     image: img,
                     bytes: Vec::new(), // No need to re-save
+                    cache_path,
                 });
                 return;
             }
@@ -242,10 +258,22 @@ fn spawn_image_load(
     }
 
     // Spawn async download
+    let data_dir_clone = data_dir.clone();
     tokio::spawn(async move {
         match download_image(&url).await {
             Ok((bytes, image)) => {
-                let _ = tx.send(ImageLoadResult::Success { url, image, bytes });
+                // Calculate cache path for external viewer
+                let cache_path = data_dir_clone.and_then(|dir| {
+                    kenseader_tui::rich_content::ImageDiskCache::new(&dir)
+                        .ok()
+                        .map(|dc| dc.cache_path(&url))
+                });
+                let _ = tx.send(ImageLoadResult::Success {
+                    url,
+                    image,
+                    bytes,
+                    cache_path,
+                });
             }
             Err(e) => {
                 let _ = tx.send(ImageLoadResult::Failure { url, error: e });
@@ -305,7 +333,7 @@ async fn load_articles_preserve_selection(app: &mut App, preserve: bool) -> Resu
         }
 
         // Always clear rich state when articles change - it will be re-initialized on demand
-        app.rich_state = None;
+        app.clear_rich_state();
     }
 
     Ok(())
@@ -315,7 +343,7 @@ async fn load_articles_preserve_selection(app: &mut App, preserve: bool) -> Resu
 fn init_rich_article_state(app: &mut App, data_dir: Option<&PathBuf>) {
     // Only initialize if image preview is enabled
     if !app.config.ui.image_preview {
-        app.rich_state = None;
+        app.clear_rich_state();
         return;
     }
 
@@ -337,7 +365,7 @@ fn init_rich_article_state(app: &mut App, data_dir: Option<&PathBuf>) {
 
         app.rich_state = Some(rich_state);
     } else {
-        app.rich_state = None;
+        app.clear_rich_state();
     }
 }
 
@@ -434,7 +462,7 @@ async fn handle_action(
             // Re-initialize rich state when article changes to ensure consistent rendering
             if app.focus == Focus::ArticleList && prev_article != app.selected_article {
                 app.detail_scroll = 0; // Reset scroll to top
-                app.rich_state = None;
+                app.clear_rich_state();
                 init_rich_article_state(app, data_dir);
             }
         }
@@ -472,7 +500,7 @@ async fn handle_action(
             // Re-initialize rich state when article changes to ensure consistent rendering
             if app.focus == Focus::ArticleList && prev_article != app.selected_article {
                 app.detail_scroll = 0; // Reset scroll to top
-                app.rich_state = None;
+                app.clear_rich_state();
                 init_rich_article_state(app, data_dir);
             }
         }
@@ -844,7 +872,7 @@ async fn handle_action(
                 }
                 app.selected_article = article_idx;
                 app.detail_scroll = 0;
-                app.rich_state = None;
+                app.clear_rich_state();
                 init_rich_article_state(app, data_dir);
                 app.set_status("← Back");
             }
@@ -857,7 +885,7 @@ async fn handle_action(
                 }
                 app.selected_article = article_idx;
                 app.detail_scroll = 0;
-                app.rich_state = None;
+                app.clear_rich_state();
                 init_rich_article_state(app, data_dir);
                 app.set_status("→ Forward");
             }
@@ -870,7 +898,7 @@ async fn handle_action(
                     if app.selected_article < app.articles.len().saturating_sub(1) {
                         app.selected_article += 1;
                         app.detail_scroll = 0;
-                        app.rich_state = None;
+                        app.clear_rich_state();
                         init_rich_article_state(app, data_dir);
                     }
                 }
@@ -930,6 +958,108 @@ async fn handle_action(
             app.clear_article_selection();
             app.clear_feed_selection();
             app.set_status("Selection cleared");
+        }
+        // Image navigation and viewing actions
+        Action::ViewImage => {
+            // Enter fullscreen image viewer mode
+            if let Some(ref rich_state) = app.rich_state {
+                let image_count = rich_state.content.image_urls.len();
+                if image_count > 0 {
+                    // Use focused image index or default to first image
+                    let index = rich_state.focused_image.unwrap_or(0);
+                    app.mode = Mode::ImageViewer(index);
+                } else {
+                    app.set_status("No images in this article");
+                }
+            }
+        }
+        Action::OpenImage => {
+            // Open image in external viewer
+            let image_index = match app.mode {
+                Mode::ImageViewer(idx) => Some(idx),
+                _ => app.rich_state.as_ref().and_then(|s| s.focused_image),
+            };
+
+            if let Some(idx) = image_index {
+                if let Some(ref rich_state) = app.rich_state {
+                    if let Some(url) = rich_state.content.image_urls.get(idx) {
+                        if let Some(cached) = rich_state.image_cache.get(url) {
+                            if let Some(ref path) = cached.cache_path {
+                                if path.exists() {
+                                    if let Err(e) = open::that(path) {
+                                        app.set_status(format!("Failed to open image: {}", e));
+                                    } else {
+                                        app.set_status("Opening image in external viewer...");
+                                    }
+                                } else {
+                                    app.set_status("Image not cached locally");
+                                }
+                            } else {
+                                app.set_status("Image cache path not available");
+                            }
+                        } else {
+                            app.set_status("Image not loaded yet");
+                        }
+                    }
+                }
+            } else {
+                app.set_status("No image focused. Press Tab to focus an image.");
+            }
+        }
+        Action::NextImage => {
+            if let Some(ref mut rich_state) = app.rich_state {
+                let count = rich_state.content.image_urls.len();
+                if count > 0 {
+                    match &mut app.mode {
+                        Mode::ImageViewer(idx) => {
+                            *idx = (*idx + 1) % count;
+                        }
+                        _ => {
+                            rich_state.focused_image = Some(
+                                rich_state
+                                    .focused_image
+                                    .map(|i| (i + 1) % count)
+                                    .unwrap_or(0),
+                            );
+                            let idx = rich_state.focused_image.unwrap();
+                            app.set_status(format!("Image {}/{}", idx + 1, count));
+                        }
+                    }
+                } else {
+                    app.set_status("No images in this article");
+                }
+            }
+        }
+        Action::PrevImage => {
+            if let Some(ref mut rich_state) = app.rich_state {
+                let count = rich_state.content.image_urls.len();
+                if count > 0 {
+                    match &mut app.mode {
+                        Mode::ImageViewer(idx) => {
+                            *idx = if *idx == 0 { count - 1 } else { *idx - 1 };
+                        }
+                        _ => {
+                            rich_state.focused_image = Some(
+                                rich_state
+                                    .focused_image
+                                    .map(|i| if i == 0 { count - 1 } else { i - 1 })
+                                    .unwrap_or(count - 1),
+                            );
+                            let idx = rich_state.focused_image.unwrap();
+                            app.set_status(format!("Image {}/{}", idx + 1, count));
+                        }
+                    }
+                } else {
+                    app.set_status("No images in this article");
+                }
+            }
+        }
+        Action::ExitImageViewer => {
+            if matches!(app.mode, Mode::ImageViewer(_)) {
+                // Clear fullscreen image before returning to article view
+                app.image_renderer.clear_all();
+                app.mode = Mode::Normal;
+            }
         }
         Action::None => {}
     }

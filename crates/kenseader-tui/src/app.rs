@@ -7,6 +7,7 @@ use kenseader_core::ipc::DaemonClient;
 use kenseader_core::AppConfig;
 use uuid::Uuid;
 
+use crate::image_renderer::ImageRenderer;
 use crate::rich_content::{ArticleImageCache, ContentElement, RichContent};
 
 /// Rich content state for the current article
@@ -23,6 +24,8 @@ pub struct RichArticleState {
     pub viewport_height: u16,
     /// Image height in terminal rows
     pub image_height: u16,
+    /// Index of currently focused image (for navigation and external viewer)
+    pub focused_image: Option<usize>,
 }
 
 impl RichArticleState {
@@ -40,6 +43,7 @@ impl RichArticleState {
             total_height: 0,
             viewport_height: 0,
             image_height: Self::DEFAULT_IMAGE_HEIGHT,
+            focused_image: None,
         }
     }
 
@@ -54,6 +58,7 @@ impl RichArticleState {
             total_height: 0,
             viewport_height: 0,
             image_height: Self::DEFAULT_IMAGE_HEIGHT,
+            focused_image: None,
         }
     }
 
@@ -127,6 +132,7 @@ impl RichArticleState {
         self.image_cache.clear();
         self.element_heights.clear();
         self.total_height = 0;
+        self.focused_image = None;
     }
 }
 
@@ -162,6 +168,8 @@ pub enum Mode {
     BatchDeleteConfirm,
     /// Help overlay
     Help,
+    /// Fullscreen image viewer mode (image index)
+    ImageViewer(usize),
 }
 
 /// Application state
@@ -214,6 +222,8 @@ pub struct App {
     pub visual_start_feed: Option<usize>,
     /// Whether a refresh operation is in progress
     pub is_refreshing: bool,
+    /// Image renderer for high-resolution image display
+    pub image_renderer: ImageRenderer,
 }
 
 impl App {
@@ -243,6 +253,7 @@ impl App {
             visual_start_article: None,
             visual_start_feed: None,
             is_refreshing: false,
+            image_renderer: ImageRenderer::new(),
         }
     }
 
@@ -291,6 +302,13 @@ impl App {
     /// Get the currently selected article mutably
     pub fn current_article_mut(&mut self) -> Option<&mut Article> {
         self.articles.get_mut(self.selected_article)
+    }
+
+    /// Clear rich state and any rendered images
+    /// This should be called when switching articles to avoid ghost images
+    pub fn clear_rich_state(&mut self) {
+        self.rich_state = None;
+        self.image_renderer.clear_all();
     }
 
     /// Move focus to the next panel (right)

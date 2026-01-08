@@ -21,3 +21,4 @@ open.workspace = true
 uuid.workspace = true
 url.workspace = true
 unicode-width = "0.2"
+base64.workspace = true
