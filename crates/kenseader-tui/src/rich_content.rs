@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use std::time::Instant;
 
-use image::DynamicImage;
+use image::{DynamicImage, RgbaImage};
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::StatefulProtocol;
 
@@ -619,6 +620,146 @@ impl ArticleImageCache {
             Some(ImageState::Failed(err)) => Some(format!("[Failed: {} ]", err)),
             _ => None,
         }
+    }
+}
+
+/// Cache key for pre-resized images with quantized dimensions
+#[derive(Hash, Eq, PartialEq, Clone)]
+struct ResizedCacheKey {
+    url: String,
+    /// Quantized width bucket (rounded to WIDTH_BUCKET_SIZE)
+    width_bucket: u16,
+    /// Quantized height bucket (rounded to HEIGHT_BUCKET_SIZE)
+    height_bucket: u16,
+}
+
+/// Pre-resized and converted image data ready for halfblock rendering
+pub struct ResizedImageData {
+    /// RGBA pixel data ready for rendering
+    pub rgba: RgbaImage,
+    /// Actual pixel dimensions after resize
+    pub pixel_width: u32,
+    pub pixel_height: u32,
+    /// Timestamp for LRU eviction
+    last_used: Instant,
+}
+
+/// LRU cache for pre-resized images to avoid repeated resize operations
+pub struct ResizedImageCache {
+    cache: HashMap<ResizedCacheKey, ResizedImageData>,
+}
+
+impl ResizedImageCache {
+    /// Maximum number of cached resized images
+    const MAX_ENTRIES: usize = 50;
+    /// Width quantization bucket size (columns)
+    const WIDTH_BUCKET_SIZE: u16 = 8;
+    /// Height quantization bucket size (rows)
+    const HEIGHT_BUCKET_SIZE: u16 = 4;
+
+    pub fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
+        }
+    }
+
+    /// Quantize dimensions to bucket for cache stability during scroll
+    fn quantize_dimensions(width: u16, height: u16) -> (u16, u16) {
+        let w_bucket = ((width + Self::WIDTH_BUCKET_SIZE - 1) / Self::WIDTH_BUCKET_SIZE)
+            * Self::WIDTH_BUCKET_SIZE;
+        let h_bucket = ((height + Self::HEIGHT_BUCKET_SIZE - 1) / Self::HEIGHT_BUCKET_SIZE)
+            * Self::HEIGHT_BUCKET_SIZE;
+        (w_bucket.max(Self::WIDTH_BUCKET_SIZE), h_bucket.max(Self::HEIGHT_BUCKET_SIZE))
+    }
+
+    /// Get or create a pre-resized image for the given dimensions
+    /// Returns the cached RGBA data, avoiding expensive resize/convert on every frame
+    pub fn get_or_resize(
+        &mut self,
+        url: &str,
+        source_image: &DynamicImage,
+        target_width: u16,
+        target_height: u16,
+    ) -> &ResizedImageData {
+        let (width_bucket, height_bucket) = Self::quantize_dimensions(target_width, target_height);
+        let key = ResizedCacheKey {
+            url: url.to_string(),
+            width_bucket,
+            height_bucket,
+        };
+
+        // Check if already cached
+        if self.cache.contains_key(&key) {
+            // Update last_used and return
+            let entry = self.cache.get_mut(&key).unwrap();
+            entry.last_used = Instant::now();
+            return self.cache.get(&key).unwrap();
+        }
+
+        // Not cached - resize and store
+        // Calculate actual pixel dimensions (halfblocks use 2 pixels per row)
+        let pixel_width = width_bucket as u32;
+        let pixel_height = (height_bucket as u32) * 2;
+
+        // Resize image
+        let resized = source_image.resize_exact(
+            pixel_width,
+            pixel_height,
+            image::imageops::FilterType::Triangle,
+        );
+
+        // Convert to RGBA
+        let rgba = resized.to_rgba8();
+
+        let data = ResizedImageData {
+            rgba,
+            pixel_width,
+            pixel_height,
+            last_used: Instant::now(),
+        };
+
+        // Evict old entries if needed
+        self.evict_if_needed();
+
+        // Store and return
+        self.cache.insert(key.clone(), data);
+        self.cache.get(&key).unwrap()
+    }
+
+    /// Evict oldest entries if cache is over capacity
+    fn evict_if_needed(&mut self) {
+        if self.cache.len() < Self::MAX_ENTRIES {
+            return;
+        }
+
+        // Find oldest entries by last_used timestamp
+        let mut entries: Vec<_> = self.cache.iter()
+            .map(|(k, v)| (k.clone(), v.last_used))
+            .collect();
+        entries.sort_by_key(|(_, t)| *t);
+
+        // Evict oldest 25%
+        let to_remove = self.cache.len() / 4;
+        for (key, _) in entries.into_iter().take(to_remove) {
+            self.cache.remove(&key);
+        }
+    }
+
+    /// Clear all cached images (call on article switch)
+    pub fn clear(&mut self) {
+        self.cache.clear();
+    }
+
+    /// Get cache statistics for debugging
+    #[allow(dead_code)]
+    pub fn stats(&self) -> (usize, usize) {
+        (self.cache.len(), Self::MAX_ENTRIES)
+    }
+}
+
+impl Default for ResizedImageCache {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

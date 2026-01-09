@@ -8,7 +8,7 @@ use kenseader_core::AppConfig;
 use uuid::Uuid;
 
 use crate::image_renderer::ImageRenderer;
-use crate::rich_content::{ArticleImageCache, ContentElement, RichContent};
+use crate::rich_content::{ArticleImageCache, ContentElement, ResizedImageCache, RichContent};
 
 /// Rich content state for the current article
 pub struct RichArticleState {
@@ -16,6 +16,8 @@ pub struct RichArticleState {
     pub content: RichContent,
     /// Image cache for this article
     pub image_cache: ArticleImageCache,
+    /// Pre-resized image cache for halfblock rendering (avoids resize on every frame)
+    pub resized_cache: ResizedImageCache,
     /// Pre-computed line height for each element
     pub element_heights: Vec<u16>,
     /// Total content height in lines
@@ -39,6 +41,7 @@ impl RichArticleState {
         Self {
             content,
             image_cache,
+            resized_cache: ResizedImageCache::new(),
             element_heights: Vec::new(),
             total_height: 0,
             viewport_height: 0,
@@ -54,6 +57,7 @@ impl RichArticleState {
         Self {
             content,
             image_cache,
+            resized_cache: ResizedImageCache::new(),
             element_heights: Vec::new(),
             total_height: 0,
             viewport_height: 0,
@@ -130,6 +134,7 @@ impl RichArticleState {
     /// Clear all cached data
     pub fn clear(&mut self) {
         self.image_cache.clear();
+        self.resized_cache.clear();
         self.element_heights.clear();
         self.total_height = 0;
         self.focused_image = None;
@@ -208,8 +213,9 @@ pub struct App {
     pub pending_key: Option<char>,
     /// Rich content state for current article (replaces image_cache)
     pub rich_state: Option<RichArticleState>,
-    /// Reading history stack - stores (feed_index, article_index) tuples
-    pub read_history: Vec<(usize, usize)>,
+    /// Reading history stack - stores (feed_id, article_id) tuples
+    /// Using IDs instead of indices to ensure correct navigation in unread-only mode
+    pub read_history: Vec<(Uuid, Uuid)>,
     /// Current position in history (1-indexed, 0 means empty)
     pub history_position: usize,
     /// Selected article indices (for batch operations)
@@ -560,14 +566,24 @@ impl App {
         }
     }
 
-    /// Record current position to history
+    /// Record current position to history using IDs (not indices)
     pub fn push_history(&mut self) {
+        // Get current feed and article IDs
+        let feed_id = match self.feeds.get(self.selected_feed) {
+            Some(feed) => feed.id,
+            None => return,
+        };
+        let article_id = match self.articles.get(self.selected_article) {
+            Some(article) => article.id,
+            None => return,
+        };
+
         // If not at the end of history, truncate forward history
         if self.history_position < self.read_history.len() {
             self.read_history.truncate(self.history_position);
         }
 
-        let entry = (self.selected_feed, self.selected_article);
+        let entry = (feed_id, article_id);
 
         // Avoid recording consecutive duplicates
         if self.read_history.last() != Some(&entry) {
@@ -576,8 +592,8 @@ impl App {
         }
     }
 
-    /// Navigate back in history
-    pub fn history_back(&mut self) -> Option<(usize, usize)> {
+    /// Navigate back in history - returns (feed_id, article_id)
+    pub fn history_back(&mut self) -> Option<(Uuid, Uuid)> {
         if self.history_position > 1 {
             self.history_position -= 1;
             self.read_history.get(self.history_position - 1).copied()
@@ -586,14 +602,24 @@ impl App {
         }
     }
 
-    /// Navigate forward in history
-    pub fn history_forward(&mut self) -> Option<(usize, usize)> {
+    /// Navigate forward in history - returns (feed_id, article_id)
+    pub fn history_forward(&mut self) -> Option<(Uuid, Uuid)> {
         if self.history_position < self.read_history.len() {
             self.history_position += 1;
             self.read_history.get(self.history_position - 1).copied()
         } else {
             None
         }
+    }
+
+    /// Find feed index by ID
+    pub fn find_feed_index(&self, feed_id: Uuid) -> Option<usize> {
+        self.feeds.iter().position(|f| f.id == feed_id)
+    }
+
+    /// Find article index by ID
+    pub fn find_article_index(&self, article_id: Uuid) -> Option<usize> {
+        self.articles.iter().position(|a| a.id == article_id)
     }
 
     // ========== Selection Methods ==========

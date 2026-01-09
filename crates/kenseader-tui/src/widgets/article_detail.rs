@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Focus, RichArticleState};
 use crate::image_renderer::RenderBackend;
-use crate::rich_content::{ContentElement, ImageState};
+use crate::rich_content::{ContentElement, ImageState, ResizedImageCache};
 use crate::theme::GruvboxMaterial;
 
 /// Information about an image to render
@@ -189,18 +189,36 @@ impl ArticleDetailWidget {
         let active_urls: Vec<String> = visible_images.iter().map(|(url, _, _, _, _, _)| url.clone()).collect();
 
         // Render each visible image using state-aware API
+        // Collect failed images for fallback rendering
+        let mut failed_images: Vec<(String, image::DynamicImage, u16, u16, u16, u16)> = Vec::new();
+
         if let Some(ref mut kitty) = app.image_renderer.kitty_renderer() {
             for (url, image, x, y, width, height) in visible_images {
                 if let Err(e) = kitty.display_or_update(&url, &image, x, y, width, height) {
                     tracing::error!("Failed to display image via Kitty: {}", e);
-                    // Fallback to halfblocks
-                    let render_area = Rect { x, y, width, height };
-                    Self::render_halfblocks_at_position(frame, render_area, &image);
+                    // Collect for fallback rendering after releasing kitty borrow
+                    failed_images.push((url, image, x, y, width, height));
                 }
             }
 
             // Clean up images that are no longer visible
             let _ = kitty.end_frame(&active_urls);
+        }
+
+        // Fallback to halfblocks for failed images (now we can access rich_state again)
+        if !failed_images.is_empty() {
+            if let Some(ref mut rich_state) = app.rich_state {
+                for (url, image, x, y, width, height) in failed_images {
+                    let render_area = Rect { x, y, width, height };
+                    Self::render_halfblocks_at_position(
+                        frame,
+                        render_area,
+                        &image,
+                        &mut rich_state.resized_cache,
+                        &url,
+                    );
+                }
+            }
         }
     }
 
@@ -294,6 +312,17 @@ impl ArticleDetailWidget {
             return;
         };
 
+        // First pass: collect render info and clone images to avoid borrow conflicts
+        // (we need both image_cache for the image and resized_cache for caching)
+        struct RenderItem {
+            url: String,
+            image: image::DynamicImage,
+            render_area: Rect,
+            is_focused: bool,
+            image_area: Rect,
+        }
+        let mut render_items: Vec<RenderItem> = Vec::new();
+
         for img_info in images {
             // Calculate if image is visible in viewport
             let img_top_in_content = img_info.content_y;
@@ -336,15 +365,10 @@ impl ArticleDetailWidget {
                 height: render_height,
             };
 
-            // Render area for the image
-            let render_area = if rich_state.focused_image == Some(img_info.image_index) {
-                // Draw border for focused image
-                let border = Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(GruvboxMaterial::YELLOW));
-                frame.render_widget(border, image_area);
+            let is_focused = rich_state.focused_image == Some(img_info.image_index);
 
-                // Shrink area for image inside border
+            // Calculate render area (accounting for border if focused)
+            let render_area = if is_focused {
                 Rect {
                     x: image_area.x + 1,
                     y: image_area.y + 1,
@@ -356,37 +380,57 @@ impl ArticleDetailWidget {
             };
 
             if render_area.width > 0 && render_area.height > 0 {
-                // Use halfblock rendering for reliable display
-                Self::render_halfblocks_at_position(frame, render_area, &cached.image);
+                render_items.push(RenderItem {
+                    url: img_info.url.clone(),
+                    image: cached.image.clone(),
+                    render_area,
+                    is_focused,
+                    image_area,
+                });
             }
+        }
+
+        // Second pass: render images using cached resized data
+        for item in render_items {
+            // Draw border for focused image
+            if item.is_focused {
+                let border = Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(GruvboxMaterial::YELLOW));
+                frame.render_widget(border, item.image_area);
+            }
+
+            // Use halfblock rendering with resize cache
+            Self::render_halfblocks_at_position(
+                frame,
+                item.render_area,
+                &item.image,
+                &mut rich_state.resized_cache,
+                &item.url,
+            );
         }
     }
 
     /// Render image using halfblocks at a specific position
-    fn render_halfblocks_at_position(frame: &mut Frame, area: Rect, img: &DynamicImage) {
-        // Each character cell represents 2 vertical pixels
+    /// Uses ResizedImageCache to avoid expensive resize/convert on every frame
+    fn render_halfblocks_at_position(
+        frame: &mut Frame,
+        area: Rect,
+        img: &DynamicImage,
+        resized_cache: &mut ResizedImageCache,
+        url: &str,
+    ) {
+        // Get pre-resized image from cache (or resize and cache if not present)
+        let cached = resized_cache.get_or_resize(url, img, area.width, area.height);
+        let rgba = &cached.rgba;
+        let new_width = cached.pixel_width;
+        let new_height = cached.pixel_height;
+
+        // Calculate target dimensions for centering
         let target_width = area.width as u32;
-        let target_height = (area.height as u32) * 2;
-
-        // Calculate aspect-ratio preserving dimensions
-        let (img_width, img_height) = img.dimensions();
-        let scale_w = target_width as f32 / img_width as f32;
-        let scale_h = target_height as f32 / img_height as f32;
-        let scale = scale_w.min(scale_h);
-
-        let new_width = ((img_width as f32 * scale) as u32).max(1);
-        let new_height = ((img_height as f32 * scale) as u32).max(1);
-
-        // Resize image
-        let resized = img.resize_exact(
-            new_width,
-            new_height,
-            image::imageops::FilterType::Triangle,
-        );
-        let rgba = resized.to_rgba8();
 
         // Center the image
-        let x_offset = (target_width.saturating_sub(new_width)) / 2;
+        let x_offset = target_width.saturating_sub(new_width) / 2;
         let y_offset = (area.height as u32).saturating_sub(new_height / 2) / 2;
 
         // Render each row

@@ -4,6 +4,7 @@
 //! See: https://sw.kovidgoyal.net/kitty/graphics-protocol/
 
 use image::{DynamicImage, GenericImageView};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{self, Write};
 
@@ -38,13 +39,16 @@ pub struct KittyRenderer {
     next_id: u32,
     /// Currently displayed images: url -> (kitty_id, display_info)
     displayed: HashMap<String, (u32, DisplayedImage)>,
-    /// Cached encoded images: (url, max_cols, max_rows) -> EncodedImage
+    /// Cached encoded images: (url, quantized_cols, quantized_rows) -> EncodedImage
     encoded_cache: HashMap<(String, u16, u16), EncodedImage>,
     /// Flag indicating if display state has changed
     dirty: bool,
     /// Cell dimensions (width, height) in pixels
     cell_size: (u32, u32),
 }
+
+/// Dimension quantization bucket size for cache stability
+const DIMENSION_BUCKET_SIZE: u16 = 4;
 
 impl KittyRenderer {
     pub fn new() -> Self {
@@ -56,6 +60,15 @@ impl KittyRenderer {
             // Default cell size for Kitty (can be detected via escape sequence)
             cell_size: (8, 16),
         }
+    }
+
+    /// Quantize dimensions to bucket for cache stability during scroll
+    fn quantize_dimensions(cols: u16, rows: u16) -> (u16, u16) {
+        let q_cols = ((cols + DIMENSION_BUCKET_SIZE - 1) / DIMENSION_BUCKET_SIZE)
+            * DIMENSION_BUCKET_SIZE;
+        let q_rows = ((rows + DIMENSION_BUCKET_SIZE - 1) / DIMENSION_BUCKET_SIZE)
+            * DIMENSION_BUCKET_SIZE;
+        (q_cols.max(DIMENSION_BUCKET_SIZE), q_rows.max(DIMENSION_BUCKET_SIZE))
     }
 
     /// Clear all images from the terminal
@@ -151,11 +164,14 @@ impl KittyRenderer {
         }
 
         // Get or create encoded image with aspect ratio preserved
-        let cache_key = (url.to_string(), max_cols, max_rows);
+        // Use quantized dimensions for cache key to improve hit rate during scroll
+        let (q_cols, q_rows) = Self::quantize_dimensions(max_cols, max_rows);
+        let cache_key = (url.to_string(), q_cols, q_rows);
         let encoded = if let Some(cached) = self.encoded_cache.get(&cache_key) {
             cached
         } else {
-            let enc = self.encode_png_preserve_aspect(img, max_cols, max_rows)?;
+            // Use quantized dimensions for encoding to match cache key
+            let enc = self.encode_png_preserve_aspect(img, q_cols, q_rows)?;
             self.encoded_cache.insert(cache_key.clone(), enc);
             self.encoded_cache.get(&cache_key).unwrap()
         };
@@ -217,21 +233,22 @@ impl KittyRenderer {
         let actual_cols = ((new_pixel_width + cell_width - 1) / cell_width) as u16;
         let actual_rows = ((new_pixel_height + cell_height - 1) / cell_height) as u16;
 
-        // Resize image preserving aspect ratio
-        let resized = if scale < 1.0 {
-            img.resize(
+        // Resize image preserving aspect ratio using Cow to avoid unnecessary clones
+        let to_encode: Cow<DynamicImage> = if scale < 1.0 {
+            Cow::Owned(img.resize(
                 new_pixel_width,
                 new_pixel_height,
                 image::imageops::FilterType::Lanczos3,
-            )
+            ))
         } else {
-            img.clone()
+            // No resize needed - borrow instead of clone
+            Cow::Borrowed(img)
         };
 
         // Encode to PNG
         let mut png_data = Vec::new();
         let encoder = image::codecs::png::PngEncoder::new(&mut png_data);
-        resized
+        to_encode
             .write_with_encoder(encoder)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
