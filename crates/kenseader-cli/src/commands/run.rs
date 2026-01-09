@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use uuid::Uuid;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -342,6 +343,41 @@ async fn load_articles_preserve_selection(app: &mut App, preserve: bool) -> Resu
     Ok(())
 }
 
+/// Load articles for history navigation - ignores unread-only filter to find the target article
+async fn load_articles_for_history(app: &mut App, target_article_id: Uuid) -> Result<bool> {
+    let feed_id = match app.current_feed() {
+        Some(feed) => feed.id,
+        None => return Ok(false),
+    };
+
+    // First try to find in current filtered list
+    let unread_only = matches!(app.view_mode, ViewMode::UnreadOnly);
+    app.articles = app.client.list_articles(Some(feed_id), unread_only).await?;
+
+    if let Some(idx) = app.find_article_index(target_article_id) {
+        app.selected_article = idx;
+        app.detail_scroll = 0;
+        app.clear_rich_state();
+        return Ok(true);
+    }
+
+    // If in unread-only mode and article not found, load all articles
+    if unread_only {
+        app.articles = app.client.list_articles(Some(feed_id), false).await?;
+
+        if let Some(idx) = app.find_article_index(target_article_id) {
+            app.selected_article = idx;
+            app.detail_scroll = 0;
+            app.clear_rich_state();
+            // Temporarily switch to All mode to show the article
+            app.view_mode = ViewMode::All;
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 /// Initialize rich content state for the current article
 fn init_rich_article_state(app: &mut App, data_dir: Option<&PathBuf>) {
     // Only initialize if image preview is enabled
@@ -450,6 +486,10 @@ async fn handle_action(
                 // Update visual selection if in visual mode
                 app.update_visual_selection_feeds();
             } else {
+                // Record history before switching articles in ArticleDetail
+                if app.focus == Focus::ArticleDetail && app.selected_article > 0 {
+                    app.push_history();
+                }
                 app.move_up();
                 // Update visual selection if in visual mode (for ArticleList)
                 if matches!(app.focus, Focus::ArticleList | Focus::ArticleDetail) {
@@ -466,6 +506,25 @@ async fn handle_action(
             if app.focus == Focus::ArticleList && prev_article != app.selected_article {
                 app.detail_scroll = 0; // Reset scroll to top
                 app.clear_rich_state();
+                init_rich_article_state(app, data_dir);
+            }
+            // Handle article change in ArticleDetail (with auto mark-read)
+            if app.focus == Focus::ArticleDetail && prev_article != app.selected_article {
+                app.detail_scroll = 0;
+                app.clear_rich_state();
+                // Auto mark-read
+                if let Some(article) = app.current_article() {
+                    if !article.is_read {
+                        let article_id = article.id;
+                        client.mark_read(article_id).await?;
+                        if let Some(article) = app.current_article_mut() {
+                            article.is_read = true;
+                        }
+                        if let Some(feed) = app.current_feed_mut() {
+                            feed.unread_count = feed.unread_count.saturating_sub(1);
+                        }
+                    }
+                }
                 init_rich_article_state(app, data_dir);
             }
         }
@@ -488,6 +547,10 @@ async fn handle_action(
                 // Update visual selection if in visual mode
                 app.update_visual_selection_feeds();
             } else {
+                // Record history before switching articles in ArticleDetail
+                if app.focus == Focus::ArticleDetail && app.selected_article < app.articles.len().saturating_sub(1) {
+                    app.push_history();
+                }
                 app.move_down();
                 // Update visual selection if in visual mode (for ArticleList)
                 if matches!(app.focus, Focus::ArticleList | Focus::ArticleDetail) {
@@ -504,6 +567,25 @@ async fn handle_action(
             if app.focus == Focus::ArticleList && prev_article != app.selected_article {
                 app.detail_scroll = 0; // Reset scroll to top
                 app.clear_rich_state();
+                init_rich_article_state(app, data_dir);
+            }
+            // Handle article change in ArticleDetail (with auto mark-read)
+            if app.focus == Focus::ArticleDetail && prev_article != app.selected_article {
+                app.detail_scroll = 0;
+                app.clear_rich_state();
+                // Auto mark-read
+                if let Some(article) = app.current_article() {
+                    if !article.is_read {
+                        let article_id = article.id;
+                        client.mark_read(article_id).await?;
+                        if let Some(article) = app.current_article_mut() {
+                            article.is_read = true;
+                        }
+                        if let Some(feed) = app.current_feed_mut() {
+                            feed.unread_count = feed.unread_count.saturating_sub(1);
+                        }
+                    }
+                }
                 init_rich_article_state(app, data_dir);
             }
         }
@@ -558,6 +640,11 @@ async fn handle_action(
             }
         }
         Action::JumpToTop => {
+            let prev_article = app.selected_article;
+            // Record history before jumping in ArticleDetail
+            if app.focus == Focus::ArticleDetail && app.selected_article > 0 {
+                app.push_history();
+            }
             app.jump_to_top();
             app.clear_pending_key();
             // Update visual selection if in visual mode
@@ -569,8 +656,31 @@ async fn handle_action(
                     app.update_visual_selection_feeds();
                 }
             }
+            // Handle article change in ArticleDetail (with auto mark-read)
+            if app.focus == Focus::ArticleDetail && prev_article != app.selected_article {
+                app.detail_scroll = 0;
+                app.clear_rich_state();
+                if let Some(article) = app.current_article() {
+                    if !article.is_read {
+                        let article_id = article.id;
+                        client.mark_read(article_id).await?;
+                        if let Some(article) = app.current_article_mut() {
+                            article.is_read = true;
+                        }
+                        if let Some(feed) = app.current_feed_mut() {
+                            feed.unread_count = feed.unread_count.saturating_sub(1);
+                        }
+                    }
+                }
+                init_rich_article_state(app, data_dir);
+            }
         }
         Action::JumpToBottom => {
+            let prev_article = app.selected_article;
+            // Record history before jumping in ArticleDetail
+            if app.focus == Focus::ArticleDetail && app.selected_article < app.articles.len().saturating_sub(1) {
+                app.push_history();
+            }
             app.jump_to_bottom();
             // Update visual selection if in visual mode
             match app.focus {
@@ -580,6 +690,24 @@ async fn handle_action(
                 Focus::Subscriptions => {
                     app.update_visual_selection_feeds();
                 }
+            }
+            // Handle article change in ArticleDetail (with auto mark-read)
+            if app.focus == Focus::ArticleDetail && prev_article != app.selected_article {
+                app.detail_scroll = 0;
+                app.clear_rich_state();
+                if let Some(article) = app.current_article() {
+                    if !article.is_read {
+                        let article_id = article.id;
+                        client.mark_read(article_id).await?;
+                        if let Some(article) = app.current_article_mut() {
+                            article.is_read = true;
+                        }
+                        if let Some(feed) = app.current_feed_mut() {
+                            feed.unread_count = feed.unread_count.saturating_sub(1);
+                        }
+                    }
+                }
+                init_rich_article_state(app, data_dir);
             }
         }
         Action::PendingG => {
@@ -867,29 +995,47 @@ async fn handle_action(
             }
         }
         Action::HistoryBack => {
-            if let Some((feed_idx, article_idx)) = app.history_back() {
-                if feed_idx != app.selected_feed {
-                    app.selected_feed = feed_idx;
-                    load_articles(app).await?;
+            // Debug: show history state
+            let history_len = app.read_history.len();
+            let history_pos = app.history_position;
+
+            if let Some((feed_id, article_id)) = app.history_back() {
+                // Find feed by ID
+                if let Some(feed_idx) = app.find_feed_index(feed_id) {
+                    if feed_idx != app.selected_feed {
+                        app.selected_feed = feed_idx;
+                    }
+                    // Load articles and find the target article (ignores unread-only if needed)
+                    if load_articles_for_history(app, article_id).await? {
+                        init_rich_article_state(app, data_dir);
+                        app.set_status("← Back");
+                    } else {
+                        app.set_status(format!("Article not found (history: {}/{})", history_pos, history_len));
+                    }
+                } else {
+                    app.set_status(format!("Feed not found (history: {}/{})", history_pos, history_len));
                 }
-                app.selected_article = article_idx;
-                app.detail_scroll = 0;
-                app.clear_rich_state();
-                init_rich_article_state(app, data_dir);
-                app.set_status("← Back");
+            } else {
+                app.set_status(format!("No history to go back (pos: {}, len: {})", history_pos, history_len));
             }
         }
         Action::HistoryForward => {
-            if let Some((feed_idx, article_idx)) = app.history_forward() {
-                if feed_idx != app.selected_feed {
-                    app.selected_feed = feed_idx;
-                    load_articles(app).await?;
+            if let Some((feed_id, article_id)) = app.history_forward() {
+                // Find feed by ID
+                if let Some(feed_idx) = app.find_feed_index(feed_id) {
+                    if feed_idx != app.selected_feed {
+                        app.selected_feed = feed_idx;
+                    }
+                    // Load articles and find the target article (ignores unread-only if needed)
+                    if load_articles_for_history(app, article_id).await? {
+                        init_rich_article_state(app, data_dir);
+                        app.set_status("→ Forward");
+                    } else {
+                        app.set_status("Article not found in history");
+                    }
+                } else {
+                    app.set_status("Feed not found in history");
                 }
-                app.selected_article = article_idx;
-                app.detail_scroll = 0;
-                app.clear_rich_state();
-                init_rich_article_state(app, data_dir);
-                app.set_status("→ Forward");
             }
         }
         Action::ToggleSelect => {

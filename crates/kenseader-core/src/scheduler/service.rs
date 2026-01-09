@@ -157,7 +157,8 @@ impl SchedulerService {
                 _ = summarize_interval.tick() => {
                     if let Some(ref summarizer) = self.summarizer {
                         debug!("Running scheduled summarization");
-                        match summarize_pending_articles(&self.db, summarizer.clone(), 5).await {
+                        // No article limit - batch size is controlled by token limit
+                        match summarize_pending_articles(&self.db, summarizer.clone()).await {
                             Ok(count) => {
                                 if count > 0 {
                                     info!("Scheduled summarization: {} articles", count);

@@ -289,7 +289,7 @@ impl AiProvider for OpenAiProvider {
     }
 
     fn batch_char_limit(&self) -> usize {
-        100000 // ~25K tokens for GPT-4
+        200000 // ~100K tokens (conservative estimate: 2 chars/token for mixed content)
     }
 
     fn min_content_length(&self) -> usize {

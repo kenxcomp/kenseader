@@ -95,7 +95,7 @@ pub trait AiProvider: Send + Sync {
 
     /// Get the maximum token/character limit for batch processing
     fn batch_char_limit(&self) -> usize {
-        80000 // ~20K tokens, conservative default
+        200000 // ~100K tokens (conservative estimate: 2 chars/token for mixed content)
     }
 
     /// Get minimum content length for summarization

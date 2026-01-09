@@ -234,23 +234,55 @@ impl<'a> ArticleRepository<'a> {
     }
 
     /// Get articles that need summarization
-    pub async fn list_unsummarized(&self, limit: u32) -> Result<Vec<Article>> {
+    /// Only returns unread articles with content_text length >= min_length and no summary
+    pub async fn list_unsummarized(&self, limit: u32, min_length: usize) -> Result<Vec<Article>> {
         let rows: Vec<ArticleRow> = sqlx::query_as(
             r#"
             SELECT id, feed_id, guid, url, title, author, content, content_text,
                    summary, summary_generated_at, published_at, fetched_at,
                    is_read, read_at, is_saved, created_at, image_url, relevance_score
             FROM articles
-            WHERE summary IS NULL AND content_text IS NOT NULL
+            WHERE summary IS NULL
+              AND content_text IS NOT NULL
+              AND LENGTH(content_text) >= ?
+              AND is_read = 0
             ORDER BY created_at DESC
             LIMIT ?
             "#,
         )
+        .bind(min_length as i64)
         .bind(limit)
         .fetch_all(self.db.pool())
         .await?;
 
         Ok(rows.into_iter().map(Article::from).collect())
+    }
+
+    /// Check if articles are still unread (for batch processing validation)
+    /// Returns only the IDs of articles that are still unread
+    pub async fn filter_unread_ids(&self, ids: &[Uuid]) -> Result<Vec<Uuid>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build placeholders for IN clause
+        let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
+        let query = format!(
+            "SELECT id FROM articles WHERE id IN ({}) AND is_read = 0",
+            placeholders.join(", ")
+        );
+
+        let mut query_builder = sqlx::query_scalar::<_, String>(&query);
+        for id in ids {
+            query_builder = query_builder.bind(id.to_string());
+        }
+
+        let rows: Vec<String> = query_builder.fetch_all(self.db.pool()).await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|id| Uuid::parse_str(&id).ok())
+            .collect())
     }
 
     /// Mark an article as read

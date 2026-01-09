@@ -24,3 +24,4 @@ dirs.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true
 open.workspace = true
+uuid.workspace = true
