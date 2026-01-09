@@ -224,7 +224,14 @@ pub struct App {
     pub is_refreshing: bool,
     /// Image renderer for high-resolution image display
     pub image_renderer: ImageRenderer,
+    /// Terminal viewport height for adaptive scroll calculations
+    pub viewport_height: u16,
+    /// Current spinner animation frame
+    pub spinner_frame: usize,
 }
+
+/// Spinner animation frames (braille pattern)
+pub const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 impl App {
     pub fn new(client: Arc<DaemonClient>, config: Arc<AppConfig>) -> Self {
@@ -254,7 +261,21 @@ impl App {
             visual_start_feed: None,
             is_refreshing: false,
             image_renderer: ImageRenderer::new(),
+            viewport_height: 24, // Default, will be updated on first render
+            spinner_frame: 0,
         }
+    }
+
+    /// Tick the spinner animation (call on each tick event)
+    pub fn tick_spinner(&mut self) {
+        if self.is_refreshing {
+            self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAMES.len();
+        }
+    }
+
+    /// Get the current spinner character
+    pub fn current_spinner(&self) -> char {
+        SPINNER_FRAMES[self.spinner_frame]
     }
 
     /// Get the currently selected feed
@@ -363,8 +384,9 @@ impl App {
         }
     }
 
-    /// Scroll down by half page
+    /// Scroll down by half page (uses viewport_height for adaptive scroll)
     pub fn scroll_half_page_down(&mut self) {
+        let half_page = (self.viewport_height / 2).max(1);
         match self.focus {
             Focus::Subscriptions => {
                 let jump = (self.feeds.len() / 2).max(1);
@@ -375,13 +397,14 @@ impl App {
                 self.selected_article = (self.selected_article + jump).min(self.articles.len().saturating_sub(1));
             }
             Focus::ArticleDetail => {
-                self.detail_scroll = self.detail_scroll.saturating_add(10);
+                self.detail_scroll = self.detail_scroll.saturating_add(half_page);
             }
         }
     }
 
-    /// Scroll up by half page
+    /// Scroll up by half page (uses viewport_height for adaptive scroll)
     pub fn scroll_half_page_up(&mut self) {
+        let half_page = (self.viewport_height / 2).max(1);
         match self.focus {
             Focus::Subscriptions => {
                 let jump = (self.feeds.len() / 2).max(1);
@@ -392,7 +415,43 @@ impl App {
                 self.selected_article = self.selected_article.saturating_sub(jump);
             }
             Focus::ArticleDetail => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(10);
+                self.detail_scroll = self.detail_scroll.saturating_sub(half_page);
+            }
+        }
+    }
+
+    /// Scroll down by full page (uses viewport_height for adaptive scroll)
+    pub fn scroll_full_page_down(&mut self) {
+        let full_page = self.viewport_height.max(1);
+        match self.focus {
+            Focus::Subscriptions => {
+                let jump = self.feeds.len().max(1);
+                self.selected_feed = (self.selected_feed + jump).min(self.feeds.len().saturating_sub(1));
+            }
+            Focus::ArticleList => {
+                let jump = self.articles.len().max(1);
+                self.selected_article = (self.selected_article + jump).min(self.articles.len().saturating_sub(1));
+            }
+            Focus::ArticleDetail => {
+                self.detail_scroll = self.detail_scroll.saturating_add(full_page);
+            }
+        }
+    }
+
+    /// Scroll up by full page (uses viewport_height for adaptive scroll)
+    pub fn scroll_full_page_up(&mut self) {
+        let full_page = self.viewport_height.max(1);
+        match self.focus {
+            Focus::Subscriptions => {
+                let jump = self.feeds.len().max(1);
+                self.selected_feed = self.selected_feed.saturating_sub(jump);
+            }
+            Focus::ArticleList => {
+                let jump = self.articles.len().max(1);
+                self.selected_article = self.selected_article.saturating_sub(jump);
+            }
+            Focus::ArticleDetail => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(full_page);
             }
         }
     }

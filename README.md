@@ -8,11 +8,17 @@ A high-performance terminal RSS reader with AI-powered summarization and rich co
 - **Vim-Style Navigation** - Full vim keybindings for efficient navigation
 - **AI Summarization** - Automatic article summaries via multiple AI providers (Claude, Gemini, OpenAI, Codex)
 - **Smart Article Filtering** - AI-powered relevance scoring based on user interests, auto-filters low-relevance articles
+- **Article Style Classification** - AI classifies articles by style (tutorial, news, opinion, analysis, review), tone, and length
 - **Background Scheduler** - Automatic feed refresh, article cleanup, AI summarization, and filtering in the background
 - **Inline Image Display** - Images displayed at their original positions within article content
 - **Rich Content Rendering** - Styled headings, quotes, code blocks, and lists
 - **Protocol Auto-Detection** - Automatically selects best image protocol (Sixel/Kitty/iTerm2/Halfblocks)
-- **Search** - Real-time search with `/` and navigate matches with `n`/`N`
+- **Search** - Real-time search with `/` and navigate matches with `n`/`N`, with highlighting
+- **Batch Selection** - Yazi-style batch selection with `Space` and Visual mode with `v` for bulk operations
+- **Reading History** - Navigate through reading history with `u` (back) and `Ctrl+r` (forward)
+- **OPML Import** - Import subscriptions from OPML files for easy migration
+- **Loading Indicators** - Animated spinner during feed refresh operations
+- **Error Display** - Feeds with fetch errors are highlighted in red
 - **RSSHub Support** - Native `rsshub://` protocol for easy subscriptions
 - **SQLite Storage** - Fast, local database for feeds and articles
 - **Auto Mark-Read** - Articles automatically marked as read when viewed
@@ -108,6 +114,7 @@ kenseader daemon stop
 | `run` | Start the TUI interface |
 | `subscribe` | Subscribe to an RSS feed |
 | `unsubscribe` | Unsubscribe from a feed |
+| `import` | Import subscriptions from OPML file |
 | `list` | List all subscriptions |
 | `refresh` | Refresh all feeds |
 | `cleanup` | Clean up old articles |
@@ -136,12 +143,46 @@ kenseader daemon stop
 
 | Key | Action |
 |-----|--------|
-| `Enter` | Select / Open article |
+| `Enter` | Select article / Open fullscreen image viewer (in detail view) |
 | `b` | Open article in browser (in detail view) |
 | `s` | Toggle saved/bookmark |
-| `d` | Delete subscription (with confirmation) |
-| `r` | Refresh feeds |
+| `d` | Toggle read/unread (article list) / Delete subscription (feed list, with confirmation) |
+| `r` | Refresh feeds (async, non-blocking) |
 | `i` | Toggle unread-only mode |
+| `u` | Go back in reading history |
+| `Ctrl+r` | Go forward in reading history |
+
+### Batch Selection (Yazi-style)
+
+| Key | Action |
+|-----|--------|
+| `Space` | Toggle selection and move to next item |
+| `v` | Enter Visual mode for range selection |
+| `Esc` | Exit Visual mode / Clear selection |
+| `d` | Batch toggle read (articles) / Delete selected (feeds) |
+
+Visual mode tips:
+- Use `gg` then `v` then `G` to select all items
+- Selected items show ✓ marker with purple background
+- Status bar shows `VISUAL` mode and selection count
+
+### Image Navigation (Article Detail)
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Focus next image |
+| `Shift+Tab` | Focus previous image |
+| `Enter` | Open fullscreen image viewer |
+| `o` | Open focused image in external viewer |
+
+### Fullscreen Image Viewer
+
+| Key | Action |
+|-----|--------|
+| `n` / `l` / `→` / `Space` | Next image |
+| `p` / `h` / `←` | Previous image |
+| `o` / `Enter` | Open image in external viewer |
+| `q` / `Esc` | Exit fullscreen mode |
 
 ### Search
 
@@ -209,15 +250,18 @@ show_timestamps = true
 image_preview = true
 
 [sync]
-refresh_interval_secs = 300   # Auto-refresh interval (0 = disabled)
+refresh_interval_secs = 3600  # Scheduler check interval (0 = disabled)
+feed_refresh_interval_secs = 43200  # Per-feed refresh interval (12 hours)
 cleanup_interval_secs = 3600  # Old article cleanup interval
 summarize_interval_secs = 60  # AI summarization interval
 filter_interval_secs = 120    # Article filtering interval
 request_timeout_secs = 30
 rate_limit_ms = 1000
+# proxy_url = "http://127.0.0.1:7890"  # HTTP/SOCKS5 proxy for feed fetching
 
 [rsshub]
-base_url = "https://rsshub.app"
+base_url = "https://hub.slarker.me"  # Default (rsshub.app is Cloudflare protected)
+# access_key = "your_access_key"  # For instances requiring authentication
 ```
 
 ## Image Display
@@ -226,20 +270,51 @@ Kenseader displays images inline within article content, at their original posit
 
 ### Supported Protocols
 
-| Protocol | Terminals | Quality |
-|----------|-----------|---------|
-| **Kitty Graphics** | Kitty | Highest |
-| **iTerm2 Inline** | iTerm2 | High |
-| **Sixel** | xterm, mlterm, foot, WezTerm, GNOME Terminal | High |
-| **Halfblocks** | All terminals with true color | Medium |
+| Protocol | Terminals | Quality | Note |
+|----------|-----------|---------|------|
+| **Üeberzug++** | X11/Wayland terminals | Highest (native resolution) | Recommended for Linux |
+| **Kitty Graphics** | Kitty | Highest | Native protocol |
+| **iTerm2 Inline** | iTerm2, WezTerm | High | macOS native |
+| **Sixel** | xterm, mlterm, foot, contour | High | Wide support |
+| **Halfblocks** | All terminals with true color | Medium (uses `▀` characters) | Universal fallback |
+
+### Üeberzug++ (Recommended for Linux)
+
+For the best image quality on Linux, install [Üeberzug++](https://github.com/jstkdng/ueberzugpp):
+
+```bash
+# Arch Linux
+sudo pacman -S ueberzugpp
+
+# Fedora
+sudo dnf install ueberzugpp
+
+# Ubuntu/Debian (from source or AppImage)
+# See: https://github.com/jstkdng/ueberzugpp#installation
+```
+
+Üeberzug++ renders images as native overlay windows, providing true high-resolution display regardless of terminal limitations. Kenseader automatically detects and uses it when available in X11/Wayland environments.
 
 ### How It Works
 
-1. **Auto-Detection** - Terminal capabilities are detected on startup
-2. **Visible-First Loading** - Only images in the viewport are loaded first
-3. **Async Download** - Images are downloaded in the background without blocking UI
-4. **Dual Cache** - Memory cache for fast access + disk cache for persistence
-5. **Fallback** - Graceful degradation to Unicode halfblock characters if no graphics protocol is available
+1. **Auto-Detection** - Terminal capabilities and environment are detected on startup
+2. **Backend Selection** - The best available backend is chosen automatically:
+   - On X11/Wayland with Üeberzug++: Native window overlay (highest quality)
+   - On Kitty/iTerm2/WezTerm: Native terminal protocols
+   - Fallback: Unicode halfblock characters (`▀`)
+3. **Visible-First Loading** - Only images in the viewport are loaded first
+4. **Async Download** - Images are downloaded in the background without blocking UI
+5. **Dual Cache** - Memory cache for fast access + disk cache for persistence
+6. **Graceful Fallback** - Degrades to halfblocks if no high-resolution option is available
+
+### Fullscreen Image Viewer
+
+When viewing an article, press `Enter` to open the fullscreen image viewer:
+
+- **High-resolution display** - Uses the full terminal window for maximum image clarity
+- **Navigate between images** - Use `n`/`p` or arrow keys to switch images
+- **Open externally** - Press `o` to open the image in your system's default image viewer
+- **Works on any terminal** - Even with halfblocks, fullscreen mode provides better resolution than inline display
 
 ### Configuration
 
@@ -334,10 +409,45 @@ summary_language = "English"   # Default
 
 ### Batch Summarization
 
-The background daemon uses batch summarization to process multiple articles in a single AI request, reducing API costs and improving efficiency.
+The background daemon uses intelligent batch summarization to process multiple articles in a single AI request, maximizing efficiency and reducing API costs.
 
-- **Minimum Content Length**: Articles must have at least 1000 characters to be summarized
-- **Batch Size Limits**: ~80,000 chars for Claude, ~100,000 chars for OpenAI/Gemini
+#### Dynamic Batch Processing
+
+- **No Fixed Article Limit**: Articles are packed into batches dynamically based on content size
+- **Token Limit**: Each batch targets ~100k tokens (~200k characters) for optimal API utilization
+- **Content Truncation**: Long articles are automatically truncated to 4,000 characters to ensure more articles fit per batch
+- **Smart Filtering**: Already-read articles are automatically excluded before each batch request to avoid wasting tokens
+
+#### Processing Flow
+
+```
+1. Fetch unread articles without summaries (up to 500 per cycle)
+2. For each batch:
+   a. Re-check article read status (skip if marked read)
+   b. Pack articles until reaching ~100k token limit
+   c. Send batch request to AI
+   d. Save summaries to database
+3. Continue until all articles are processed
+```
+
+#### Configuration
+
+```toml
+[ai]
+# Minimum content length for AI summarization (chars)
+min_summarize_length = 500
+```
+
+#### Efficiency Example
+
+```
+Found 235 articles to summarize
+Batch 1: 72 articles, 197,442 chars
+Batch 2: 60 articles, 198,694 chars
+Batch 3: 93 articles, 197,918 chars
+Batch 4: 10 articles, 18,283 chars
+Summarized 235 articles in 4 batch(es)
+```
 
 ## RSSHub Protocol
 
@@ -353,8 +463,16 @@ Configure a custom RSSHub instance:
 
 ```toml
 [rsshub]
-base_url = "https://your-rsshub-instance.com"
+base_url = "https://hub.slarker.me"  # Default instance
+# Alternative instances:
+#   https://rsshub.rssforever.com
+#   https://rsshub.ktachibana.party
+#   https://rsshub.qufy.me
 ```
+
+> **Note**: The official `rsshub.app` is protected by Cloudflare and will return 403 errors. Kenseader defaults to `hub.slarker.me` which works without protection. If you experience issues, try switching to another public instance from the list above, or [deploy your own](https://docs.rsshub.app/deploy/).
+
+Sources: [Public RSSHub Instances](https://github.com/AboutRSS/ALL-about-RSS#rsshub)
 
 ## Project Structure
 
@@ -410,10 +528,20 @@ Daemon started (PID: 12345). Press Ctrl+C or run 'kenseader daemon stop' to stop
 
 | Task | Default Interval | Description |
 |------|------------------|-------------|
-| **Feed Refresh** | 5 minutes | Fetches new articles from all subscribed feeds |
+| **Feed Refresh** | 1 hour (scheduler) | Smart refresh: only fetches feeds older than per-feed interval |
 | **Article Cleanup** | 1 hour | Removes articles older than retention period |
 | **AI Summarization** | 1 minute | Generates summaries for new articles |
 | **Article Filtering** | 2 minutes | Scores articles by relevance and auto-filters low-relevance ones |
+| **Style Classification** | 2 minutes | Classifies article style, tone, and length (runs with filtering) |
+
+### Smart Feed Refresh
+
+The scheduler uses intelligent per-feed refresh intervals to reduce unnecessary network requests:
+
+- **Scheduler Interval** (`refresh_interval_secs`): How often the scheduler checks for feeds to refresh (default: 1 hour)
+- **Per-Feed Interval** (`feed_refresh_interval_secs`): Minimum time between refreshes for each feed (default: 12 hours)
+
+Each feed is only refreshed if its `last_fetched_at` is older than the per-feed interval. New feeds (never fetched) are refreshed immediately.
 
 ### IPC API
 
@@ -447,13 +575,15 @@ The daemon exposes these operations via Unix socket:
 
 ```toml
 [sync]
-refresh_interval_secs = 300   # Feed refresh (0 = disabled)
-cleanup_interval_secs = 3600  # Article cleanup
-summarize_interval_secs = 60  # AI summarization
-filter_interval_secs = 120    # Article filtering
+refresh_interval_secs = 3600        # Scheduler check interval (0 = disabled)
+feed_refresh_interval_secs = 43200  # Per-feed interval (12 hours)
+cleanup_interval_secs = 3600        # Article cleanup
+summarize_interval_secs = 60        # AI summarization
+filter_interval_secs = 120          # Article filtering
 ```
 
 Set `refresh_interval_secs = 0` to disable the background scheduler entirely.
+Set `feed_refresh_interval_secs = 0` to refresh all feeds every scheduler cycle.
 
 ## Development
 
@@ -534,7 +664,7 @@ Kenseader includes AI-powered article filtering that automatically scores articl
 
 ### Workflow
 
-The filtering process runs in two stages:
+The filtering process runs in three stages:
 
 **Stage 1: Summarization**
 - Articles with 500+ characters get AI-generated summaries
@@ -544,6 +674,12 @@ The filtering process runs in two stages:
 - Articles with summaries are scored using "title + summary"
 - Short articles (< 500 chars) are scored using "title + content"
 - Articles scoring below the threshold (default 0.3) are auto-filtered
+
+**Stage 3: Style Classification**
+- Summarized articles are classified by style (tutorial, news, opinion, analysis, review)
+- Tone is detected (formal, casual, technical, humorous)
+- Length category is assigned (short, medium, long)
+- Style preferences are aggregated to learn your content style interests
 
 ### Configuration
 
@@ -573,7 +709,8 @@ filter_interval_secs = 120
 
 1. Ensure `image_preview = true` in config
 2. Check terminal supports true color: `echo $COLORTERM` should output `truecolor` or `24bit`
-3. For best results, use iTerm2, Kitty, or WezTerm
+3. For best results on Linux, install Üeberzug++: `sudo pacman -S ueberzugpp` (Arch) or see installation guide
+4. For macOS, use iTerm2, Kitty, or WezTerm for native image protocols
 
 ### Slow Image Loading
 

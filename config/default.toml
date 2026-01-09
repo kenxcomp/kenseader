@@ -95,6 +95,21 @@ request_timeout_secs = 30
 # Per-domain rate limit delay in milliseconds
 rate_limit_ms = 1000
 
+# HTTP proxy URL for feed fetching (supports http, https, socks5)
+# Useful for bypassing rate limits or accessing blocked feeds
+# Examples:
+#   proxy_url = "http://127.0.0.1:7890"
+#   proxy_url = "socks5://127.0.0.1:1080"
+
 [rsshub]
 # RSSHub base URL for rsshub:// protocol conversion
-base_url = "https://rsshub.app"
+# The official rsshub.app is protected by Cloudflare, use an alternative:
+base_url = "https://hub.slarker.me"
+
+# Alternative public instances (if the above doesn't work):
+#   https://rsshub.rssforever.com
+#   https://rsshub.ktachibana.party
+#   https://rsshub.qufy.me
+
+# RSSHub access key (for protected instances that require authentication)
+# access_key = "your_access_key_here"

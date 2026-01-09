@@ -17,7 +17,8 @@ license = "MIT"
 tokio = { version = "1.43", features = ["full"] }
 
 # HTTP & Networking
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "gzip", "deflate", "brotli", "socks"] }
+bytes = "1.9"
 
 # RSS Parsing
 feed-rs = "2.3"

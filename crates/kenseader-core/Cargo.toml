@@ -9,6 +9,7 @@ description = "Core library for Kenseader RSS reader"
 [dependencies]
 tokio.workspace = true
 reqwest.workspace = true
+bytes.workspace = true
 feed-rs.workspace = true
 sqlx.workspace = true
 async-openai.workspace = true
