@@ -167,6 +167,9 @@ pub struct SyncConfig {
     /// Per-domain rate limit delay in milliseconds
     #[serde(default = "default_rate_limit")]
     pub rate_limit_ms: u64,
+    /// HTTP proxy URL for feed fetching (e.g., "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080")
+    #[serde(default)]
+    pub proxy_url: Option<String>,
 }
 
 impl Default for SyncConfig {
@@ -179,6 +182,7 @@ impl Default for SyncConfig {
             filter_interval_secs: default_filter_interval(),
             request_timeout_secs: default_timeout(),
             rate_limit_ms: default_rate_limit(),
+            proxy_url: None,
         }
     }
 }
@@ -188,12 +192,16 @@ pub struct RsshubConfig {
     /// RSSHub base URL
     #[serde(default = "default_rsshub_base_url")]
     pub base_url: String,
+    /// RSSHub access key (for protected instances)
+    #[serde(default)]
+    pub access_key: Option<String>,
 }
 
 impl Default for RsshubConfig {
     fn default() -> Self {
         Self {
             base_url: default_rsshub_base_url(),
+            access_key: None,
         }
     }
 }
@@ -289,7 +297,8 @@ fn default_rate_limit() -> u64 {
 }
 
 fn default_rsshub_base_url() -> String {
-    "https://rsshub.app".to_string()
+    // Use hub.slarker.me as default since rsshub.app is protected by Cloudflare
+    "https://hub.slarker.me".to_string()
 }
 
 impl AppConfig {

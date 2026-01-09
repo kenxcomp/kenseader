@@ -8,11 +8,17 @@
 - **Vim 风格导航** - 完整的 vim 快捷键支持，高效浏览
 - **AI 摘要** - 通过多种 AI 提供商自动生成文章摘要（Claude、Gemini、OpenAI、Codex）
 - **智能文章过滤** - 基于用户兴趣的 AI 相关性评分，自动过滤低相关性文章
+- **文章风格分类** - AI 分类文章风格（教程、新闻、观点、分析、评测）、语气和篇幅
 - **后台调度器** - 自动刷新订阅源、清理旧文章、生成 AI 摘要、智能过滤
 - **嵌入式图片显示** - 图片在文章正文的原始位置显示
 - **富文本渲染** - 支持标题、引用、代码块、列表等样式化显示
 - **协议自动检测** - 自动选择最佳图片协议（Sixel/Kitty/iTerm2/半块字符）
-- **实时搜索** - 使用 `/` 搜索，`n`/`N` 导航匹配结果
+- **实时搜索** - 使用 `/` 搜索，`n`/`N` 导航匹配结果，支持高亮显示
+- **批量选择** - Yazi 风格批量选择，`Space` 切换选择，`v` 进入 Visual 模式批量操作
+- **阅读历史** - `u` 返回上一篇，`Ctrl+r` 前进到下一篇
+- **OPML 导入** - 支持从 OPML 文件批量导入订阅，方便迁移
+- **加载动画** - 刷新订阅源时显示动画指示器
+- **错误提示** - 有抓取错误的订阅源以红色高亮显示
 - **RSSHub 支持** - 原生支持 `rsshub://` 协议，轻松订阅
 - **SQLite 存储** - 快速本地数据库存储订阅源和文章
 - **自动标记已读** - 查看文章时自动标记为已读
@@ -107,6 +113,7 @@ kenseader daemon stop
 | `run` | 启动终端界面 |
 | `subscribe` | 订阅 RSS 源 |
 | `unsubscribe` | 取消订阅 |
+| `import` | 从 OPML 文件导入订阅 |
 | `list` | 列出所有订阅 |
 | `refresh` | 刷新所有订阅源 |
 | `cleanup` | 清理旧文章 |
@@ -135,12 +142,46 @@ kenseader daemon stop
 
 | 按键 | 操作 |
 |------|------|
-| `Enter` | 选择 / 打开文章 |
+| `Enter` | 选择文章 / 打开全屏图片查看器（详情视图） |
 | `b` | 在浏览器中打开文章（详情视图） |
 | `s` | 切换收藏/书签 |
-| `d` | 删除订阅（需确认） |
-| `r` | 刷新订阅源 |
+| `d` | 切换已读/未读（文章列表） / 删除订阅（订阅源列表，需确认） |
+| `r` | 刷新订阅源（异步，非阻塞） |
 | `i` | 切换仅显示未读模式 |
+| `u` | 返回上一篇阅读历史 |
+| `Ctrl+r` | 前进到下一篇阅读历史 |
+
+### 批量选择（Yazi 风格）
+
+| 按键 | 操作 |
+|------|------|
+| `Space` | 切换选择并移动到下一项 |
+| `v` | 进入 Visual 模式进行范围选择 |
+| `Esc` | 退出 Visual 模式 / 清除选择 |
+| `d` | 批量切换已读（文章） / 删除选中项（订阅源） |
+
+Visual 模式技巧：
+- 使用 `gg` 然后 `v` 然后 `G` 来全选所有项目
+- 选中项显示 ✓ 标记和紫色背景
+- 状态栏显示 `VISUAL` 模式和选中数量
+
+### 图片导航（文章详情）
+
+| 按键 | 操作 |
+|------|------|
+| `Tab` | 聚焦下一张图片 |
+| `Shift+Tab` | 聚焦上一张图片 |
+| `Enter` | 打开全屏图片查看器 |
+| `o` | 在外部查看器中打开聚焦的图片 |
+
+### 全屏图片查看器
+
+| 按键 | 操作 |
+|------|------|
+| `n` / `l` / `→` / `空格` | 下一张图片 |
+| `p` / `h` / `←` | 上一张图片 |
+| `o` / `Enter` | 在外部查看器中打开图片 |
+| `q` / `Esc` | 退出全屏模式 |
 
 ### 搜索
 
@@ -208,15 +249,18 @@ show_timestamps = true      # 显示时间戳
 image_preview = true        # 图片预览
 
 [sync]
-refresh_interval_secs = 300   # 自动刷新间隔（秒），0 = 禁用
+refresh_interval_secs = 3600  # 调度器检查间隔（秒），0 = 禁用
+feed_refresh_interval_secs = 43200  # 单个订阅源刷新间隔（12 小时）
 cleanup_interval_secs = 3600  # 旧文章清理间隔（秒）
 summarize_interval_secs = 60  # AI 摘要生成间隔（秒）
 filter_interval_secs = 120    # 文章过滤间隔（秒）
 request_timeout_secs = 30     # 请求超时（秒）
 rate_limit_ms = 1000          # 请求频率限制（毫秒）
+# proxy_url = "http://127.0.0.1:7890"  # HTTP/SOCKS5 代理
 
 [rsshub]
-base_url = "https://rsshub.app"  # RSSHub 服务地址
+base_url = "https://hub.slarker.me"  # 默认实例（rsshub.app 被 Cloudflare 保护）
+# access_key = "your_access_key"  # 访问密钥（用于需要认证的实例）
 ```
 
 ## 图片显示
@@ -225,20 +269,42 @@ Kenseader 在文章正文中嵌入式显示图片，图片出现在其原始位�
 
 ### 支持的协议
 
-| 协议 | 终端 | 质量 |
-|------|------|------|
-| **Kitty Graphics** | Kitty | 最高 |
-| **iTerm2 Inline** | iTerm2 | 高 |
-| **Sixel** | xterm, mlterm, foot, WezTerm, GNOME Terminal | 高 |
-| **半块字符** | 所有支持真彩色的终端 | 中等 |
+| 协议 | 终端 | 质量 | 备注 |
+|------|------|------|------|
+| **Üeberzug++** | X11/Wayland 终端 | 最高（原生分辨率） | Linux 推荐 |
+| **Kitty Graphics** | Kitty | 最高 | 原生协议 |
+| **iTerm2 Inline** | iTerm2, WezTerm | 高 | macOS 原生 |
+| **Sixel** | xterm, mlterm, foot, contour | 高 | 广泛支持 |
+| **半块字符** | 所有支持真彩色的终端 | 中等（使用 `▀` 字符） | 通用回退 |
+
+### Üeberzug++（Linux 推荐）
+
+在 Linux 上获得最佳图片质量，请安装 [Üeberzug++](https://github.com/jstkdng/ueberzugpp)：
+
+```bash
+# Arch Linux
+sudo pacman -S ueberzugpp
+
+# Fedora
+sudo dnf install ueberzugpp
+
+# Ubuntu/Debian（从源码编译或使用 AppImage）
+# 参见: https://github.com/jstkdng/ueberzugpp#installation
+```
+
+Üeberzug++ 将图片渲染为原生覆盖窗口，无论终端限制如何都能提供真正的高分辨率显示。Kenseader 在 X11/Wayland 环境中会自动检测并使用它。
 
 ### 工作原理
 
-1. **自动检测** - 启动时自动检测终端图形能力
-2. **可见优先加载** - 优先加载视口内的图片
-3. **异步下载** - 图片在后台下载，不阻塞界面
-4. **双层缓存** - 内存缓存快速访问 + 磁盘缓存持久化
-5. **优雅降级** - 不支持图形协议时自动回退到 Unicode 半块字符
+1. **自动检测** - 启动时自动检测终端能力和环境
+2. **后端选择** - 自动选择最佳可用后端：
+   - X11/Wayland + Üeberzug++：原生窗口覆盖（最高质量）
+   - Kitty/iTerm2/WezTerm：原生终端协议
+   - 回退：Unicode 半块字符（`▀`）
+3. **可见优先加载** - 优先加载视口内的图片
+4. **异步下载** - 图片在后台下载，不阻塞界面
+5. **双层缓存** - 内存缓存快速访问 + 磁盘缓存持久化
+6. **优雅降级** - 不支持高分辨率选项时自动回退到半块字符
 
 ### 配置选项
 
@@ -332,10 +398,45 @@ summary_language = "Chinese"  # 中文（推荐中文用户使用）
 
 ### 批量摘要
 
-后台守护进程使用批量摘要功能，在单个 AI 请求中处理多篇文章，降低 API 成本并提高效率。
+后台守护进程使用智能批量摘要功能，在单个 AI 请求中处理多篇文章，最大化效率并降低 API 成本。
 
-- **最小内容长度**：文章至少需要 1000 个字符才会生成摘要
-- **批量大小限制**：Claude 约 80,000 字符，OpenAI/Gemini 约 100,000 字符
+#### 动态批处理
+
+- **无固定文章数限制**：根据内容大小动态打包文章到批次中
+- **Token 限制**：每个批次目标约 100k tokens（约 200k 字符），以优化 API 利用率
+- **内容截断**：长文章自动截断为 4,000 字符，确保每批次能容纳更多文章
+- **智能过滤**：每次批量请求前自动排除已读文章，避免浪费 token
+
+#### 处理流程
+
+```
+1. 获取未读且无摘要的文章（每轮最多 500 篇）
+2. 对每个批次：
+   a. 重新检查文章已读状态（已读则跳过）
+   b. 打包文章直到达到约 100k token 限制
+   c. 发送批量请求到 AI
+   d. 保存摘要到数据库
+3. 继续处理直到所有文章完成
+```
+
+#### 配置选项
+
+```toml
+[ai]
+# AI 摘要的最小内容长度（字符）
+min_summarize_length = 500
+```
+
+#### 效率示例
+
+```
+发现 235 篇文章需要摘要
+批次 1: 72 篇文章, 197,442 字符
+批次 2: 60 篇文章, 198,694 字符
+批次 3: 93 篇文章, 197,918 字符
+批次 4: 10 篇文章, 18,283 字符
+共计 235 篇文章，4 个批次完成摘要
+```
 
 ## RSSHub 协议
 
@@ -351,8 +452,16 @@ kenseader -s https://rsshub.app/github/trending/daily -n "GitHub 趋势"
 
 ```toml
 [rsshub]
-base_url = "https://your-rsshub-instance.com"
+base_url = "https://hub.slarker.me"  # 默认实例
+# 备选实例：
+#   https://rsshub.rssforever.com
+#   https://rsshub.ktachibana.party
+#   https://rsshub.qufy.me
 ```
+
+> **注意**：官方 `rsshub.app` 被 Cloudflare 保护，会返回 403 错误。Kenseader 默认使用 `hub.slarker.me`，无需特殊配置即可使用。如遇问题，可尝试切换到上方列出的其他公共实例，或[部署自己的实例](https://docs.rsshub.app/deploy/)。
+
+来源：[公共 RSSHub 实例列表](https://github.com/AboutRSS/ALL-about-RSS#rsshub)
 
 ## 项目结构
 
@@ -408,10 +517,20 @@ Daemon started (PID: 12345). Press Ctrl+C or run 'kenseader daemon stop' to stop
 
 | 任务 | 默认间隔 | 描述 |
 |------|----------|------|
-| **订阅源刷新** | 5 分钟 | 从所有订阅源获取新文章 |
+| **订阅源刷新** | 1 小时（调度器） | 智能刷新：仅获取超过单源间隔的订阅源 |
 | **旧文章清理** | 1 小时 | 删除超过保留期限的文章 |
 | **AI 摘要生成** | 1 分钟 | 为新文章生成摘要 |
 | **文章过滤** | 2 分钟 | 评估文章相关性并自动过滤低相关性文章 |
+| **风格分类** | 2 分钟 | 分类文章风格、语气和篇幅（与过滤同时运行） |
+
+### 智能订阅源刷新
+
+调度器使用智能的单源刷新间隔来减少不必要的网络请求：
+
+- **调度器间隔** (`refresh_interval_secs`)：调度器检查需要刷新的订阅源的频率（默认：1 小时）
+- **单源间隔** (`feed_refresh_interval_secs`)：每个订阅源两次刷新之间的最小时间（默认：12 小时）
+
+只有当订阅源的 `last_fetched_at` 超过单源间隔时才会刷新。新订阅（从未获取过）会立即刷新。
 
 ### IPC API
 
@@ -445,13 +564,15 @@ Daemon started (PID: 12345). Press Ctrl+C or run 'kenseader daemon stop' to stop
 
 ```toml
 [sync]
-refresh_interval_secs = 300   # 订阅源刷新间隔（0 = 禁用）
-cleanup_interval_secs = 3600  # 旧文章清理间隔
-summarize_interval_secs = 60  # AI 摘要生成间隔
-filter_interval_secs = 120    # 文章过滤间隔
+refresh_interval_secs = 3600        # 调度器检查间隔（0 = 禁用）
+feed_refresh_interval_secs = 43200  # 单源刷新间隔（12 小时）
+cleanup_interval_secs = 3600        # 旧文章清理间隔
+summarize_interval_secs = 60        # AI 摘要生成间隔
+filter_interval_secs = 120          # 文章过滤间隔
 ```
 
 设置 `refresh_interval_secs = 0` 可完全禁用后台调度器。
+设置 `feed_refresh_interval_secs = 0` 则每次调度器运行时刷新所有订阅源。
 
 ## 开发
 
@@ -532,7 +653,7 @@ Kenseader 包含 AI 驱动的文章过滤功能，根据您的阅读兴趣自动
 
 ### 工作流程
 
-过滤过程分两个阶段进行：
+过滤过程分三个阶段进行：
 
 **阶段 1：摘要生成**
 - 500 字符以上的文章会生成 AI 摘要
@@ -542,6 +663,12 @@ Kenseader 包含 AI 驱动的文章过滤功能，根据您的阅读兴趣自动
 - 有摘要的文章使用「标题 + 摘要」进行评分
 - 短文章（< 500 字符）使用「标题 + 正文」进行评分
 - 评分低于阈值（默认 0.3）的文章会被自动过滤
+
+**阶段 3：风格分类**
+- 已生成摘要的文章会进行风格分类（教程、新闻、观点、分析、评测）
+- 检测文章语气（正式、随意、技术、幽默）
+- 分配篇幅类别（短、中、长）
+- 聚合风格偏好以学习您的内容风格兴趣
 
 ### 配置选项
 
@@ -571,7 +698,8 @@ filter_interval_secs = 120
 
 1. 确保配置中 `image_preview = true`
 2. 检查终端是否支持真彩色：`echo $COLORTERM` 应输出 `truecolor` 或 `24bit`
-3. 建议使用 iTerm2、Kitty 或 WezTerm 以获得最佳效果
+3. Linux 用户建议安装 Üeberzug++：`sudo pacman -S ueberzugpp`（Arch）或参见安装指南
+4. macOS 用户建议使用 iTerm2、Kitty 或 WezTerm 以获得原生协议支持
 
 ### 图片加载慢
 
