@@ -297,8 +297,18 @@ pub async fn score_and_filter_articles(
     let article_repo = ArticleRepository::new(db);
     let analyzer = ProfileAnalyzer::new(db);
 
+    // Compute user preferences from behavior events before scoring
+    if let Err(e) = analyzer.compute_preferences().await {
+        tracing::warn!("Failed to compute user preferences: {}", e);
+    }
+
     // Get user interests from profile
     let interests = analyzer.get_top_tags(TimeWindow::Last30Days, 10).await?;
+    if interests.is_empty() {
+        tracing::info!("No user interests found - articles will pass through without filtering");
+    } else {
+        tracing::info!("Scoring with {} user interests: {:?}", interests.len(), interests);
+    }
 
     // Get unread articles that have summaries (completed Stage 1)
     let summarized_articles = article_repo.list_unread_summarized().await?;

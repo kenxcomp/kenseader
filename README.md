@@ -11,7 +11,8 @@ A high-performance terminal RSS reader with AI-powered summarization and rich co
 - **Article Style Classification** - AI classifies articles by style (tutorial, news, opinion, analysis, review), tone, and length
 - **Background Scheduler** - Automatic feed refresh, article cleanup, AI summarization, and filtering in the background
 - **Inline Image Display** - Images displayed at their original positions within article content
-- **Rich Content Rendering** - Styled headings, quotes, code blocks, and lists
+- **Rich Content Rendering** - Styled headings, quotes, code blocks, lists, and hyperlinks
+- **Link Navigation** - Tab through URLs and images in article content, open links in browser
 - **Protocol Auto-Detection** - Automatically selects best image protocol (Sixel/Kitty/iTerm2/Halfblocks)
 - **Search** - Real-time search with `/` and navigate matches with `n`/`N`, with highlighting
 - **Batch Selection** - Yazi-style batch selection with `Space` and Visual mode with `v` for bulk operations
@@ -166,14 +167,17 @@ Visual mode tips:
 - Selected items show ✓ marker with purple background
 - Status bar shows `VISUAL` mode and selection count
 
-### Image Navigation (Article Detail)
+### Image & Link Navigation (Article Detail)
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Focus next image |
-| `Shift+Tab` | Focus previous image |
+| `Tab` | Focus next image/link (in document order) |
+| `Shift+Tab` | Focus previous image/link |
 | `Enter` | Open fullscreen image viewer |
-| `o` | Open focused image in external viewer |
+| `o` | Smart open: open focused link in browser, or focused image in external viewer |
+| `b` | Open article's main URL in browser |
+
+Links in article content are displayed with blue underlined text. When focused, links are highlighted with a yellow background.
 
 ### Fullscreen Image Viewer
 
@@ -490,10 +494,12 @@ kenseader/
 
 ## Performance
 
-- **Lazy Loading** - Only visible images are loaded
+- **Image Preloading** - Images for nearby articles (±2) are preloaded in the background while browsing the article list, making them appear instantly when entering article detail view
+- **Lazy Loading** - Only visible images are loaded first (visible-first strategy with 20-line lookahead)
 - **Async I/O** - Non-blocking network and database operations
-- **Memory Management** - Image cache limited to 20 images
-- **Disk Cache** - Images cached at `~/.cache/kenseader/image_cache/`
+- **Memory Management** - Image cache limited to 50 entries with LRU eviction
+- **Disk Cache** - Images cached at `~/.local/share/kenseader/image_cache/` for persistence across sessions
+- **Resized Image Cache** - Pre-resized images are cached to avoid expensive resize operations on every frame
 
 ## Background Daemon
 
@@ -656,7 +662,11 @@ Kenseader includes AI-powered article filtering that automatically scores articl
 
 ### How It Works
 
-1. **Interest Learning** - The system tracks your reading behavior (clicks, saves, read completion) to learn your interests through tag affinities
+1. **Interest Learning** - The system automatically tracks your reading behavior to learn your interests:
+   - **Click events** - Recorded when you open an article (mark as read)
+   - **Save events** - Recorded when you bookmark/save an article (high weight)
+   - Tag affinities are computed from these events and used for scoring
+   - Note: For new users with no history, all articles pass through (score 1.0)
 2. **AI Scoring** - Articles are scored using a combination of:
    - **Profile Score (40%)** - Based on tag matching with your learned interests
    - **AI Score (60%)** - AI evaluates article relevance to your interests

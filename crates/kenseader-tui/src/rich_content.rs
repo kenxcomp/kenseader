@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::Instant;
 
+use regex::Regex;
+
 use image::{DynamicImage, RgbaImage};
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::StatefulProtocol;
@@ -162,6 +164,26 @@ pub enum ContentElement {
     EmptyLine,
 }
 
+/// A span of text, optionally a hyperlink
+#[derive(Clone, Debug)]
+pub struct TextSpan {
+    pub text: String,
+    pub link_url: Option<String>,
+}
+
+/// Represents a focusable item in the article content (images and links)
+#[derive(Clone, Debug)]
+pub enum FocusableItem {
+    /// An image with its index in image_urls
+    Image { url_index: usize },
+    /// A hyperlink
+    Link {
+        url: String,
+        text: String,
+        element_index: usize,
+    },
+}
+
 /// Parsed rich content ready for rendering
 #[derive(Clone)]
 pub struct RichContent {
@@ -169,9 +191,35 @@ pub struct RichContent {
     pub elements: Vec<ContentElement>,
     /// Image URLs found in content (for preloading)
     pub image_urls: Vec<String>,
+    /// All focusable items (images + links) in document order
+    pub focusable_items: Vec<FocusableItem>,
 }
 
 impl RichContent {
+    /// Extract all image URLs from HTML content without full parsing
+    /// Used for preloading images before entering article detail view
+    pub fn extract_image_urls(html: &str) -> Vec<String> {
+        let mut urls = Vec::new();
+        let mut remaining = html;
+
+        while let Some(img_start) = remaining.to_lowercase().find("<img") {
+            remaining = &remaining[img_start..];
+            if let Some(tag_end) = remaining.find('>') {
+                let tag = &remaining[..=tag_end];
+                if let Some(src) = extract_attr(tag, "src") {
+                    if !src.is_empty() && !urls.contains(&src) {
+                        urls.push(src);
+                    }
+                }
+                remaining = &remaining[tag_end + 1..];
+            } else {
+                break;
+            }
+        }
+
+        urls
+    }
+
     /// Parse HTML content into rich content elements
     pub fn from_html(html: &str) -> Self {
         let mut elements = Vec::new();
@@ -186,9 +234,13 @@ impl RichContent {
         // Clean up consecutive empty lines
         let elements = collapse_empty_lines(elements);
 
+        // Build focusable items (images + links) in document order
+        let focusable_items = build_focusable_items(&elements, &image_urls);
+
         Self {
             elements,
             image_urls,
+            focusable_items,
         }
     }
 
@@ -205,9 +257,14 @@ impl RichContent {
             })
             .collect();
 
+        let image_urls = Vec::new();
+        // Build focusable items (only bare URLs in plain text, no images)
+        let focusable_items = build_focusable_items(&elements, &image_urls);
+
         Self {
             elements,
-            image_urls: Vec::new(),
+            image_urls,
+            focusable_items,
         }
     }
 }
@@ -386,6 +443,37 @@ fn parse_html_content(html: &str, elements: &mut Vec<ContentElement>, image_urls
                             }
                         }
                     }
+                    "a" => {
+                        // Handle anchor/link elements - extract href and link text
+                        if let Some(href) = extract_attr(tag_content, "href") {
+                            let close_tag = "</a>";
+                            if let Some(close_pos) = remaining.to_lowercase().find(close_tag) {
+                                let inner = &remaining[..close_pos];
+                                let skip = close_pos + close_tag.len();
+                                remaining = remaining.get(skip..).unwrap_or("");
+                                let link_text = strip_html_tags(inner).trim().to_string();
+
+                                // Only add if href is a valid URL (http/https)
+                                if href.starts_with("http://") || href.starts_with("https://") {
+                                    if !link_text.is_empty() {
+                                        // If link text is different from URL, show both
+                                        if link_text != href && !link_text.contains(&href) {
+                                            current_text.push_str(&format!("{} ({})", link_text, href));
+                                        } else {
+                                            // Link text is the URL or contains it
+                                            current_text.push_str(&link_text);
+                                        }
+                                    } else {
+                                        // No link text, just show URL
+                                        current_text.push_str(&href);
+                                    }
+                                } else if !link_text.is_empty() {
+                                    // Non-http link (mailto, etc.), just add the text
+                                    current_text.push_str(&link_text);
+                                }
+                            }
+                        }
+                    }
                     "figure" => {
                         // Handle figure element (common in modern articles)
                         if !current_text.trim().is_empty() {
@@ -481,6 +569,94 @@ fn decode_html_entities(text: &str) -> String {
         .replace("&lsquo;", "'" )
         .replace("&rdquo;", "\"")
         .replace("&ldquo;", "\"")
+}
+
+/// Get compiled URL regex (lazy initialization)
+fn get_url_regex() -> &'static Regex {
+    static URL_REGEX: OnceLock<Regex> = OnceLock::new();
+    URL_REGEX.get_or_init(|| {
+        Regex::new(r#"https?://[^\s<>\[\](){}"']+"#).unwrap()
+    })
+}
+
+/// Parse text and extract bare URLs, returning TextSpans
+pub fn parse_text_with_urls(text: &str) -> Vec<TextSpan> {
+    let regex = get_url_regex();
+    let mut spans = Vec::new();
+    let mut last_end = 0;
+
+    for mat in regex.find_iter(text) {
+        // Add text before the URL
+        if mat.start() > last_end {
+            spans.push(TextSpan {
+                text: text[last_end..mat.start()].to_string(),
+                link_url: None,
+            });
+        }
+
+        // Add the URL as a link
+        let url = mat.as_str().to_string();
+        spans.push(TextSpan {
+            text: url.clone(),
+            link_url: Some(url),
+        });
+
+        last_end = mat.end();
+    }
+
+    // Add remaining text
+    if last_end < text.len() {
+        spans.push(TextSpan {
+            text: text[last_end..].to_string(),
+            link_url: None,
+        });
+    }
+
+    spans
+}
+
+/// Build focusable items list from parsed elements in document order
+fn build_focusable_items(elements: &[ContentElement], _image_urls: &[String]) -> Vec<FocusableItem> {
+    let mut items = Vec::new();
+    let mut image_index = 0;
+
+    for (elem_idx, element) in elements.iter().enumerate() {
+        match element {
+            ContentElement::Image { .. } => {
+                items.push(FocusableItem::Image { url_index: image_index });
+                image_index += 1;
+            }
+            ContentElement::Text(text) => {
+                // Check for bare URLs in plain text
+                let spans = parse_text_with_urls(text);
+                for span in &spans {
+                    if let Some(ref url) = span.link_url {
+                        items.push(FocusableItem::Link {
+                            url: url.clone(),
+                            text: span.text.clone(),
+                            element_index: elem_idx,
+                        });
+                    }
+                }
+            }
+            ContentElement::Quote(text) | ContentElement::ListItem(text) => {
+                // Also check quotes and list items for bare URLs
+                let spans = parse_text_with_urls(text);
+                for span in &spans {
+                    if let Some(ref url) = span.link_url {
+                        items.push(FocusableItem::Link {
+                            url: url.clone(),
+                            text: span.text.clone(),
+                            element_index: elem_idx,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    items
 }
 
 /// Collapse multiple consecutive empty lines into one
@@ -905,6 +1081,78 @@ fn build_referer(parsed: &url::Url) -> String {
     }
 }
 
+/// Global preload cache for prefetching images before entering article detail
+/// Shares the same ImageState enum as ArticleImageCache
+pub struct PreloadCache {
+    /// Image states keyed by URL
+    pub images: HashMap<String, ImageState>,
+    /// Disk cache reference
+    disk_cache: Option<ImageDiskCache>,
+}
+
+impl PreloadCache {
+    pub fn new(data_dir: Option<&PathBuf>) -> Self {
+        let disk_cache = data_dir.and_then(|d| ImageDiskCache::new(d).ok());
+        Self {
+            images: HashMap::new(),
+            disk_cache,
+        }
+    }
+
+    /// Check if an image is ready (loaded successfully)
+    pub fn is_ready(&self, url: &str) -> bool {
+        matches!(self.images.get(url), Some(ImageState::Loaded(_)))
+    }
+
+    /// Check if an image is currently loading
+    pub fn is_loading(&self, url: &str) -> bool {
+        matches!(self.images.get(url), Some(ImageState::Loading))
+    }
+
+    /// Get a loaded image
+    pub fn get(&self, url: &str) -> Option<&CachedImageData> {
+        match self.images.get(url) {
+            Some(ImageState::Loaded(data)) => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Mark an image as loading
+    pub fn start_loading(&mut self, url: &str) {
+        if !self.images.contains_key(url) {
+            self.images.insert(url.to_string(), ImageState::Loading);
+        }
+    }
+
+    /// Set image as loaded with optional cache path
+    pub fn set_loaded(&mut self, url: &str, image: DynamicImage, cache_path: Option<PathBuf>) {
+        let cached = CachedImageData::new(image, cache_path);
+        self.images
+            .insert(url.to_string(), ImageState::Loaded(cached));
+    }
+
+    /// Set image as failed
+    pub fn set_failed(&mut self, url: &str, error: String) {
+        self.images.insert(url.to_string(), ImageState::Failed(error));
+    }
+
+    /// Get the disk cache instance for loading images
+    pub fn disk_cache(&self) -> Option<&ImageDiskCache> {
+        self.disk_cache.as_ref()
+    }
+
+    /// Clear all cached images (call on feed switch)
+    pub fn clear(&mut self) {
+        self.images.clear();
+    }
+
+    /// Get cache statistics for debugging
+    #[allow(dead_code)]
+    pub fn stats(&self) -> usize {
+        self.images.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -936,5 +1184,26 @@ mod tests {
         let content = RichContent::from_html(html);
 
         assert_eq!(content.image_urls.len(), 3);
+    }
+
+    #[test]
+    fn test_extract_image_urls() {
+        let html = r#"<p>Some text</p><img src="cover.jpg"><div><IMG SRC="nested.png"></div><img src='single.gif'>"#;
+        let urls = RichContent::extract_image_urls(html);
+
+        assert_eq!(urls.len(), 3);
+        assert_eq!(urls[0], "cover.jpg");
+        assert_eq!(urls[1], "nested.png");
+        assert_eq!(urls[2], "single.gif");
+    }
+
+    #[test]
+    fn test_extract_image_urls_no_duplicates() {
+        let html = r#"<img src="same.jpg"><img src="same.jpg"><img src="different.png">"#;
+        let urls = RichContent::extract_image_urls(html);
+
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0], "same.jpg");
+        assert_eq!(urls[1], "different.png");
     }
 }

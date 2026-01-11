@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Focus, RichArticleState};
 use crate::image_renderer::RenderBackend;
-use crate::rich_content::{ContentElement, ImageState, ResizedImageCache};
+use crate::rich_content::{ContentElement, ImageState, parse_text_with_urls, ResizedImageCache, TextSpan};
 use crate::theme::GruvboxMaterial;
 
 /// Information about an image to render
@@ -275,7 +275,7 @@ impl ArticleDetailWidget {
 
             // Calculate actual screen position
             // For focused images, shrink by 1 for border
-            let (x, y, width, height) = if rich_state.focused_image == Some(img_info.image_index) {
+            let (x, y, width, height) = if rich_state.focused_image_index() == Some(img_info.image_index) {
                 (area.x + 1, render_y + 1, area.width.saturating_sub(2), render_height.saturating_sub(2))
             } else {
                 (area.x, render_y, area.width, render_height)
@@ -365,7 +365,7 @@ impl ArticleDetailWidget {
                 height: render_height,
             };
 
-            let is_focused = rich_state.focused_image == Some(img_info.image_index);
+            let is_focused = rich_state.focused_image_index() == Some(img_info.image_index);
 
             // Calculate render area (accounting for border if focused)
             let render_area = if is_focused {
@@ -539,17 +539,37 @@ impl ArticleDetailWidget {
         // Render each content element with proper text wrapping
         let wrap_width = width as usize;
 
-        for element in rich_state.content.elements.clone() {
+        // Get focused link info for highlighting
+        let focused_link_url = rich_state.focused_link_url().map(|s| s.to_string());
+
+        for (_elem_idx, element) in rich_state.content.elements.clone().into_iter().enumerate() {
             match element {
                 ContentElement::Text(text) => {
-                    // Wrap text to match Paragraph behavior
-                    let wrapped = wrap_text_unicode(&text, wrap_width);
-                    for line in wrapped {
-                        lines.push(Line::from(Span::styled(
-                            line,
-                            Style::default().fg(GruvboxMaterial::FG0),
-                        )));
-                        current_y += 1;
+                    // Parse text for URLs and render with link styling
+                    let spans = parse_text_with_urls(&text);
+                    let has_urls = spans.iter().any(|s| s.link_url.is_some());
+
+                    if has_urls {
+                        // Render with URL highlighting
+                        let rendered_lines = render_text_with_links(
+                            &spans,
+                            wrap_width,
+                            focused_link_url.as_deref(),
+                        );
+                        for line in rendered_lines {
+                            lines.push(line);
+                            current_y += 1;
+                        }
+                    } else {
+                        // No URLs, render as plain text
+                        let wrapped = wrap_text_unicode(&text, wrap_width);
+                        for line in wrapped {
+                            lines.push(Line::from(Span::styled(
+                                line,
+                                Style::default().fg(GruvboxMaterial::FG0),
+                            )));
+                            current_y += 1;
+                        }
                     }
                 }
                 ContentElement::Heading(level, text) => {
@@ -599,13 +619,15 @@ impl ArticleDetailWidget {
                         current_y += 1;
                     } else {
                         // Fallback: render using half-block characters or show status
+                        // Get focused index before borrowing image_cache mutably
+                        let is_image_focused = rich_state.focused_image_index() == Some(image_index);
                         let image_lines = Self::render_image_element(
                             url,
                             alt.as_deref(),
                             &mut rich_state.image_cache,
                             width as u32,
                             image_height as u32,
-                            rich_state.focused_image == Some(image_index),
+                            is_image_focused,
                         );
                         let line_count = image_lines.len() as u16;
                         lines.extend(image_lines);
@@ -1044,4 +1066,93 @@ fn wrap_text_unicode(text: &str, max_width: usize) -> Vec<String> {
     }
 
     result
+}
+
+/// Render text with URL highlighting and optional focus highlighting
+fn render_text_with_links<'a>(
+    spans: &[TextSpan],
+    max_width: usize,
+    focused_url: Option<&str>,
+) -> Vec<Line<'a>> {
+    let mut lines: Vec<Line<'a>> = Vec::new();
+    let mut current_line_spans: Vec<Span<'a>> = Vec::new();
+    let mut current_width = 0usize;
+
+    // Define styles
+    let normal_style = Style::default().fg(GruvboxMaterial::FG0);
+    let link_style = Style::default()
+        .fg(GruvboxMaterial::BLUE)
+        .add_modifier(Modifier::UNDERLINED);
+    let focused_link_style = Style::default()
+        .fg(GruvboxMaterial::BLUE)
+        .bg(GruvboxMaterial::YELLOW)
+        .add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+
+    for span in spans {
+        let is_link = span.link_url.is_some();
+        let is_focused = span.link_url.as_ref().map_or(false, |url| {
+            focused_url.map_or(false, |f| f == url)
+        });
+
+        let style = if is_focused {
+            focused_link_style
+        } else if is_link {
+            link_style
+        } else {
+            normal_style
+        };
+
+        // Process each character for proper wrapping
+        let mut current_span_text = String::new();
+
+        for ch in span.text.chars() {
+            let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1);
+
+            // Check if we need to wrap
+            if current_width + ch_width > max_width && max_width > 0 {
+                // Flush current span text if any
+                if !current_span_text.is_empty() {
+                    current_line_spans.push(Span::styled(current_span_text.clone(), style));
+                    current_span_text.clear();
+                }
+                // Flush current line
+                if !current_line_spans.is_empty() {
+                    lines.push(Line::from(current_line_spans));
+                    current_line_spans = Vec::new();
+                }
+                current_width = 0;
+            }
+
+            // Handle newline
+            if ch == '\n' {
+                if !current_span_text.is_empty() {
+                    current_line_spans.push(Span::styled(current_span_text.clone(), style));
+                    current_span_text.clear();
+                }
+                lines.push(Line::from(current_line_spans));
+                current_line_spans = Vec::new();
+                current_width = 0;
+            } else {
+                current_span_text.push(ch);
+                current_width += ch_width;
+            }
+        }
+
+        // Flush remaining span text
+        if !current_span_text.is_empty() {
+            current_line_spans.push(Span::styled(current_span_text, style));
+        }
+    }
+
+    // Flush remaining line
+    if !current_line_spans.is_empty() {
+        lines.push(Line::from(current_line_spans));
+    }
+
+    // Ensure at least one line
+    if lines.is_empty() {
+        lines.push(Line::from(""));
+    }
+
+    lines
 }

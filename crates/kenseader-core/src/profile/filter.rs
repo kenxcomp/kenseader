@@ -83,11 +83,11 @@ impl<'a> ArticleFilter<'a> {
                 Ok(score) => score,
                 Err(e) => {
                     tracing::warn!("AI scoring failed: {}", e);
-                    0.5 // Neutral fallback
+                    1.0 // Pass article through on error
                 }
             }
         } else {
-            0.5 // Neutral if no AI
+            1.0 // No AI configured - pass all articles through
         };
 
         // Combined score: 40% profile, 60% AI
@@ -99,7 +99,7 @@ impl<'a> ArticleFilter<'a> {
     /// Calculate profile-based score using tag matching
     fn calculate_profile_score(&self, article: &Article, interests: &[String]) -> f64 {
         if interests.is_empty() || article.tags.is_empty() {
-            return 0.5; // Neutral score
+            return 1.0; // No profile data - pass article through
         }
 
         let matches = article.tags.iter()

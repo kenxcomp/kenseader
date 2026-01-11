@@ -110,7 +110,7 @@ impl AiProvider for OpenAiProvider {
 
     async fn score_relevance(&self, content: &str, interests: &[String]) -> Result<f64> {
         if interests.is_empty() {
-            return Ok(0.5);
+            return Ok(1.0); // No user profile yet - pass article through
         }
 
         let truncated = truncate_chars(content, 3000);
@@ -223,11 +223,13 @@ impl AiProvider for OpenAiProvider {
         }
 
         if interests.is_empty() {
+            // No user profile yet - pass all articles through (score 1.0)
+            tracing::info!("No user interests found, passing all {} articles through", articles.len());
             return Ok(articles
                 .into_iter()
                 .map(|a| BatchScoreResult {
                     id: a.id,
-                    score: Some(0.5),
+                    score: Some(1.0),
                     error: None,
                 })
                 .collect());
