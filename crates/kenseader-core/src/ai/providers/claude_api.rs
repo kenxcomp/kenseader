@@ -161,7 +161,7 @@ Return only the tags as a comma-separated list, nothing else:\n\n{truncated}"
 
     async fn score_relevance(&self, content: &str, interests: &[String]) -> Result<f64> {
         if interests.is_empty() {
-            return Ok(0.5);
+            return Ok(1.0); // No user profile yet - pass article through
         }
 
         let truncated = truncate_chars(content, 3000);
@@ -274,11 +274,13 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         }
 
         if interests.is_empty() {
+            // No user profile yet - pass all articles through (score 1.0)
+            tracing::info!("No user interests found, passing all {} articles through", articles.len());
             return Ok(articles
                 .into_iter()
                 .map(|a| BatchScoreResult {
                     id: a.id,
-                    score: Some(0.5),
+                    score: Some(1.0),
                     error: None,
                 })
                 .collect());
@@ -340,7 +342,7 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
     }
 
     fn batch_char_limit(&self) -> usize {
-        100000 // ~25K tokens for Claude
+        200000 // ~100K tokens (conservative estimate: 2 chars/token for mixed content)
     }
 
     fn min_content_length(&self) -> usize {

@@ -15,6 +15,7 @@ use uuid::Uuid;
 use super::protocol::*;
 use crate::config::AppConfig;
 use crate::feed::NewFeed;
+use crate::profile::{BehaviorEventType, BehaviorTracker};
 use crate::scheduler::tasks;
 use crate::storage::{ArticleRepository, Database, FeedRepository};
 use crate::Result;
@@ -190,8 +191,31 @@ async fn handle_request(
             match serde_json::from_value::<ArticleIdParams>(request.params) {
                 Ok(params) => {
                     let repo = ArticleRepository::new(db);
+                    // Get article to find feed_id for behavior tracking
+                    let feed_id = match repo.find_by_id(params.id).await {
+                        Ok(Some(article)) => Some(article.feed_id),
+                        _ => None,
+                    };
                     match repo.mark_read(params.id).await {
-                        Ok(()) => Response::ok(id),
+                        Ok(()) => {
+                            // Record behavior event for user preference learning
+                            if let Some(feed_id) = feed_id {
+                                let tracker = BehaviorTracker::new(db);
+                                if let Err(e) = tracker
+                                    .record_event(
+                                        Some(params.id),
+                                        Some(feed_id),
+                                        BehaviorEventType::Click,
+                                        None,
+                                        None,
+                                    )
+                                    .await
+                                {
+                                    debug!("Failed to record behavior event: {}", e);
+                                }
+                            }
+                            Response::ok(id)
+                        }
                         Err(e) => Response::error(id, ERR_INTERNAL, e.to_string()),
                     }
                 }
@@ -216,11 +240,36 @@ async fn handle_request(
             match serde_json::from_value::<ArticleIdParams>(request.params) {
                 Ok(params) => {
                     let repo = ArticleRepository::new(db);
+                    // Get article to find feed_id for behavior tracking
+                    let feed_id = match repo.find_by_id(params.id).await {
+                        Ok(Some(article)) => Some(article.feed_id),
+                        _ => None,
+                    };
                     match repo.toggle_saved(params.id).await {
-                        Ok(is_saved) => Response::success(
-                            id,
-                            serde_json::json!({ "is_saved": is_saved }),
-                        ),
+                        Ok(is_saved) => {
+                            // Record save event if article was saved (not unsaved)
+                            if is_saved {
+                                if let Some(feed_id) = feed_id {
+                                    let tracker = BehaviorTracker::new(db);
+                                    if let Err(e) = tracker
+                                        .record_event(
+                                            Some(params.id),
+                                            Some(feed_id),
+                                            BehaviorEventType::Save,
+                                            None,
+                                            None,
+                                        )
+                                        .await
+                                    {
+                                        debug!("Failed to record save event: {}", e);
+                                    }
+                                }
+                            }
+                            Response::success(
+                                id,
+                                serde_json::json!({ "is_saved": is_saved }),
+                            )
+                        }
                         Err(e) => Response::error(id, ERR_INTERNAL, e.to_string()),
                     }
                 }

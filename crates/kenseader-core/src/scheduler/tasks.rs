@@ -11,6 +11,14 @@ use crate::profile::{ProfileAnalyzer, TimeWindow};
 use crate::storage::{ArticleRepository, ArticleStyleRepository, Database, FeedRepository};
 use crate::Result;
 
+/// Truncate a string to a maximum number of characters (respecting char boundaries)
+fn truncate_chars(input: &str, max_chars: usize) -> &str {
+    match input.char_indices().nth(max_chars) {
+        Some((idx, _)) => &input[..idx],
+        None => input,
+    }
+}
+
 /// Refresh feeds and fetch new articles
 /// Uses smart refresh: only refreshes feeds that haven't been fetched recently
 pub async fn refresh_all_feeds(db: &Database, config: &AppConfig) -> Result<u32> {
@@ -88,62 +96,105 @@ pub async fn cleanup_old_articles(db: &Database, config: &AppConfig) -> Result<u
     Ok(deleted)
 }
 
+/// Maximum content length per article (truncate if longer)
+const CONTENT_TRUNCATE_LIMIT: usize = 4000;
+
+/// Maximum articles to fetch in one query (safety limit)
+const MAX_ARTICLES_PER_CYCLE: u32 = 500;
+
 /// Summarize pending articles using batch processing
+/// Batch size is dynamically determined by token limit (~100k tokens)
+/// Before each batch, re-checks article status to skip already-read articles
 pub async fn summarize_pending_articles(
     db: &Database,
     summarizer: Arc<Summarizer>,
-    limit: u32,
 ) -> Result<u32> {
     let article_repo = ArticleRepository::new(db);
-    let articles = article_repo.list_unsummarized(limit).await?;
+    let min_content_len = summarizer.min_content_length();
+    let batch_char_limit = summarizer.batch_char_limit();
+
+    // Fetch all unread articles without summary
+    let articles = article_repo.list_unsummarized(MAX_ARTICLES_PER_CYCLE, min_content_len).await?;
 
     if articles.is_empty() {
         return Ok(0);
     }
 
-    let min_content_len = summarizer.min_content_length();
-    let batch_char_limit = summarizer.batch_char_limit();
-
-    // Filter articles with sufficient content and convert to batch format
-    let valid_articles: Vec<_> = articles
+    // Convert articles to batch format with content truncation
+    // Store as mutable for dynamic re-batching
+    let mut pending_articles: Vec<_> = articles
         .iter()
         .filter_map(|a| {
-            a.content_text.as_ref().and_then(|content| {
-                if content.trim().len() >= min_content_len {
-                    Some(ArticleForSummary {
-                        id: a.id.to_string(),
-                        title: a.title.clone(),
-                        content: content.clone(),
-                    })
-                } else {
-                    tracing::debug!(
-                        "Skipping article '{}': content too short ({} chars, min {})",
-                        a.title,
-                        content.trim().len(),
-                        min_content_len
-                    );
-                    None
+            a.content_text.as_ref().map(|content| {
+                // Truncate content to CONTENT_TRUNCATE_LIMIT characters
+                let truncated_content = truncate_chars(content, CONTENT_TRUNCATE_LIMIT);
+                ArticleForSummary {
+                    id: a.id.to_string(),
+                    title: a.title.clone(),
+                    content: truncated_content.to_string(),
                 }
             })
         })
         .collect();
 
-    if valid_articles.is_empty() {
+    if pending_articles.is_empty() {
         tracing::info!("No articles with sufficient content to summarize");
         return Ok(0);
     }
 
-    // Split into batches based on character limit
-    let batches = create_batches(valid_articles, batch_char_limit);
-    tracing::info!(
-        "Processing {} articles in {} batch(es)",
-        articles.len(),
-        batches.len()
-    );
-    let mut summarized = 0;
+    let total_articles = pending_articles.len();
+    tracing::info!("Found {} articles to summarize", total_articles);
 
-    for (batch_idx, batch) in batches.into_iter().enumerate() {
-        tracing::debug!("Processing batch {} with {} articles", batch_idx + 1, batch.len());
+    let mut summarized = 0;
+    let mut batch_idx = 0;
+
+    // Process articles in batches, re-checking status before each batch
+    while !pending_articles.is_empty() {
+        batch_idx += 1;
+
+        // Re-check which articles are still unread before processing
+        let pending_ids: Vec<Uuid> = pending_articles
+            .iter()
+            .filter_map(|a| Uuid::parse_str(&a.id).ok())
+            .collect();
+
+        let unread_ids = article_repo.filter_unread_ids(&pending_ids).await?;
+
+        // Filter out articles that have been marked as read
+        let original_count = pending_articles.len();
+        pending_articles.retain(|a| {
+            Uuid::parse_str(&a.id)
+                .map(|id| unread_ids.contains(&id))
+                .unwrap_or(false)
+        });
+
+        let filtered_count = original_count - pending_articles.len();
+        if filtered_count > 0 {
+            tracing::info!(
+                "Batch {}: Filtered out {} already-read articles",
+                batch_idx,
+                filtered_count
+            );
+        }
+
+        if pending_articles.is_empty() {
+            tracing::info!("No more unread articles to summarize");
+            break;
+        }
+
+        // Create a single batch from pending articles (up to char limit)
+        let batch = create_single_batch(&mut pending_articles, batch_char_limit);
+
+        if batch.is_empty() {
+            continue;
+        }
+
+        tracing::debug!(
+            "Processing batch {} with {} articles ({} remaining)",
+            batch_idx,
+            batch.len(),
+            pending_articles.len()
+        );
 
         match summarizer.batch_summarize(batch).await {
             Ok(results) => {
@@ -176,49 +227,63 @@ pub async fn summarize_pending_articles(
                 }
             }
             Err(e) => {
-                tracing::error!("Batch summarization failed: {}", e);
+                tracing::error!("Batch {} summarization failed: {}", batch_idx, e);
+                // Continue with next batch instead of failing completely
             }
         }
     }
 
     if summarized > 0 {
-        tracing::info!("Summarized {} articles", summarized);
+        tracing::info!("Summarized {} articles in {} batch(es)", summarized, batch_idx);
     }
 
     Ok(summarized)
 }
 
-/// Split articles into batches based on character limit
-fn create_batches(articles: Vec<ArticleForSummary>, char_limit: usize) -> Vec<Vec<ArticleForSummary>> {
-    let mut batches = Vec::new();
-    let mut current_batch = Vec::new();
-    let mut current_chars = 0;
-
-    // Overhead per article (prompt formatting, ID, title, etc.)
+/// Create a single batch from pending articles (removes articles from input vector)
+/// Returns articles that fit within the character limit
+fn create_single_batch(
+    pending: &mut Vec<ArticleForSummary>,
+    char_limit: usize,
+) -> Vec<ArticleForSummary> {
     const OVERHEAD_PER_ARTICLE: usize = 200;
-    // Base prompt overhead
-    const BASE_OVERHEAD: usize = 500;
+    const BASE_OVERHEAD: usize = 1000;
 
-    for article in articles {
+    let effective_limit = char_limit.saturating_sub(BASE_OVERHEAD);
+    let mut batch = Vec::new();
+    let mut current_chars = 0;
+    let mut indices_to_remove = Vec::new();
+
+    for (idx, article) in pending.iter().enumerate() {
         let article_chars = article.content.len() + article.title.len() + OVERHEAD_PER_ARTICLE;
 
-        // If adding this article would exceed limit, start new batch
-        if !current_batch.is_empty() && current_chars + article_chars > char_limit - BASE_OVERHEAD {
-            batches.push(current_batch);
-            current_batch = Vec::new();
-            current_chars = 0;
+        // If adding this article would exceed limit, stop
+        if !batch.is_empty() && current_chars + article_chars > effective_limit {
+            break;
         }
 
         current_chars += article_chars;
-        current_batch.push(article);
+        indices_to_remove.push(idx);
     }
 
-    // Don't forget the last batch
-    if !current_batch.is_empty() {
-        batches.push(current_batch);
+    // Remove articles from pending in reverse order (to preserve indices)
+    for &idx in indices_to_remove.iter().rev() {
+        batch.push(pending.remove(idx));
     }
 
-    batches
+    // Reverse to maintain original order
+    batch.reverse();
+
+    if !batch.is_empty() {
+        tracing::debug!(
+            "Created batch: {} articles, {} chars (limit: {})",
+            batch.len(),
+            current_chars,
+            effective_limit
+        );
+    }
+
+    batch
 }
 
 /// Score and filter articles based on relevance to user interests
@@ -232,8 +297,18 @@ pub async fn score_and_filter_articles(
     let article_repo = ArticleRepository::new(db);
     let analyzer = ProfileAnalyzer::new(db);
 
+    // Compute user preferences from behavior events before scoring
+    if let Err(e) = analyzer.compute_preferences().await {
+        tracing::warn!("Failed to compute user preferences: {}", e);
+    }
+
     // Get user interests from profile
     let interests = analyzer.get_top_tags(TimeWindow::Last30Days, 10).await?;
+    if interests.is_empty() {
+        tracing::info!("No user interests found - articles will pass through without filtering");
+    } else {
+        tracing::info!("Scoring with {} user interests: {:?}", interests.len(), interests);
+    }
 
     // Get unread articles that have summaries (completed Stage 1)
     let summarized_articles = article_repo.list_unread_summarized().await?;

@@ -8,7 +8,7 @@ use kenseader_core::AppConfig;
 use uuid::Uuid;
 
 use crate::image_renderer::ImageRenderer;
-use crate::rich_content::{ArticleImageCache, ContentElement, RichContent};
+use crate::rich_content::{ArticleImageCache, ContentElement, FocusableItem, PreloadCache, ResizedImageCache, RichContent};
 
 /// Rich content state for the current article
 pub struct RichArticleState {
@@ -16,6 +16,8 @@ pub struct RichArticleState {
     pub content: RichContent,
     /// Image cache for this article
     pub image_cache: ArticleImageCache,
+    /// Pre-resized image cache for halfblock rendering (avoids resize on every frame)
+    pub resized_cache: ResizedImageCache,
     /// Pre-computed line height for each element
     pub element_heights: Vec<u16>,
     /// Total content height in lines
@@ -24,8 +26,8 @@ pub struct RichArticleState {
     pub viewport_height: u16,
     /// Image height in terminal rows
     pub image_height: u16,
-    /// Index of currently focused image (for navigation and external viewer)
-    pub focused_image: Option<usize>,
+    /// Index of currently focused item in focusable_items (images + links)
+    pub focused_item: Option<usize>,
 }
 
 impl RichArticleState {
@@ -39,11 +41,12 @@ impl RichArticleState {
         Self {
             content,
             image_cache,
+            resized_cache: ResizedImageCache::new(),
             element_heights: Vec::new(),
             total_height: 0,
             viewport_height: 0,
             image_height: Self::DEFAULT_IMAGE_HEIGHT,
-            focused_image: None,
+            focused_item: None,
         }
     }
 
@@ -54,11 +57,12 @@ impl RichArticleState {
         Self {
             content,
             image_cache,
+            resized_cache: ResizedImageCache::new(),
             element_heights: Vec::new(),
             total_height: 0,
             viewport_height: 0,
             image_height: Self::DEFAULT_IMAGE_HEIGHT,
-            focused_image: None,
+            focused_item: None,
         }
     }
 
@@ -130,9 +134,41 @@ impl RichArticleState {
     /// Clear all cached data
     pub fn clear(&mut self) {
         self.image_cache.clear();
+        self.resized_cache.clear();
         self.element_heights.clear();
         self.total_height = 0;
-        self.focused_image = None;
+        self.focused_item = None;
+    }
+
+    /// Get the currently focused item
+    pub fn get_focused_item(&self) -> Option<&FocusableItem> {
+        self.focused_item.and_then(|idx| self.content.focusable_items.get(idx))
+    }
+
+    /// Get focused image index (for backwards compatibility with image cache)
+    pub fn focused_image_index(&self) -> Option<usize> {
+        match self.get_focused_item() {
+            Some(FocusableItem::Image { url_index }) => Some(*url_index),
+            _ => None,
+        }
+    }
+
+    /// Get focused link URL
+    pub fn focused_link_url(&self) -> Option<&str> {
+        match self.get_focused_item() {
+            Some(FocusableItem::Link { url, .. }) => Some(url.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Check if current focus is on an image
+    pub fn is_image_focused(&self) -> bool {
+        matches!(self.get_focused_item(), Some(FocusableItem::Image { .. }))
+    }
+
+    /// Check if current focus is on a link
+    pub fn is_link_focused(&self) -> bool {
+        matches!(self.get_focused_item(), Some(FocusableItem::Link { .. }))
     }
 }
 
@@ -208,8 +244,9 @@ pub struct App {
     pub pending_key: Option<char>,
     /// Rich content state for current article (replaces image_cache)
     pub rich_state: Option<RichArticleState>,
-    /// Reading history stack - stores (feed_index, article_index) tuples
-    pub read_history: Vec<(usize, usize)>,
+    /// Reading history stack - stores (feed_id, article_id) tuples
+    /// Using IDs instead of indices to ensure correct navigation in unread-only mode
+    pub read_history: Vec<(Uuid, Uuid)>,
     /// Current position in history (1-indexed, 0 means empty)
     pub history_position: usize,
     /// Selected article indices (for batch operations)
@@ -228,6 +265,8 @@ pub struct App {
     pub viewport_height: u16,
     /// Current spinner animation frame
     pub spinner_frame: usize,
+    /// Global preload cache for prefetching images before entering article detail
+    pub preload_cache: PreloadCache,
 }
 
 /// Spinner animation frames (braille pattern)
@@ -263,7 +302,37 @@ impl App {
             image_renderer: ImageRenderer::new(),
             viewport_height: 24, // Default, will be updated on first render
             spinner_frame: 0,
+            preload_cache: PreloadCache::new(None), // Initialized without disk cache, will be set later
         }
+    }
+
+    /// Initialize preload cache with data directory for disk cache support
+    pub fn init_preload_cache(&mut self, data_dir: Option<&PathBuf>) {
+        self.preload_cache = PreloadCache::new(data_dir);
+    }
+
+    /// Get the range of article indices to preload images for
+    /// Returns indices for current ± preload_count articles
+    pub fn get_preload_article_range(&self, preload_count: usize) -> std::ops::Range<usize> {
+        let start = self.selected_article.saturating_sub(preload_count);
+        let end = (self.selected_article + preload_count + 1).min(self.articles.len());
+        start..end
+    }
+
+    /// Get all image URLs for an article (cover image first, then content images)
+    pub fn get_article_image_urls(article: &Article) -> Vec<String> {
+        let mut urls = Vec::new();
+        // Cover image has priority
+        if let Some(ref cover) = article.image_url {
+            if !cover.is_empty() {
+                urls.push(cover.clone());
+            }
+        }
+        // Content images
+        if let Some(ref content) = article.content {
+            urls.extend(RichContent::extract_image_urls(content));
+        }
+        urls
     }
 
     /// Tick the spinner animation (call on each tick event)
@@ -560,14 +629,24 @@ impl App {
         }
     }
 
-    /// Record current position to history
+    /// Record current position to history using IDs (not indices)
     pub fn push_history(&mut self) {
+        // Get current feed and article IDs
+        let feed_id = match self.feeds.get(self.selected_feed) {
+            Some(feed) => feed.id,
+            None => return,
+        };
+        let article_id = match self.articles.get(self.selected_article) {
+            Some(article) => article.id,
+            None => return,
+        };
+
         // If not at the end of history, truncate forward history
         if self.history_position < self.read_history.len() {
             self.read_history.truncate(self.history_position);
         }
 
-        let entry = (self.selected_feed, self.selected_article);
+        let entry = (feed_id, article_id);
 
         // Avoid recording consecutive duplicates
         if self.read_history.last() != Some(&entry) {
@@ -576,8 +655,8 @@ impl App {
         }
     }
 
-    /// Navigate back in history
-    pub fn history_back(&mut self) -> Option<(usize, usize)> {
+    /// Navigate back in history - returns (feed_id, article_id)
+    pub fn history_back(&mut self) -> Option<(Uuid, Uuid)> {
         if self.history_position > 1 {
             self.history_position -= 1;
             self.read_history.get(self.history_position - 1).copied()
@@ -586,14 +665,24 @@ impl App {
         }
     }
 
-    /// Navigate forward in history
-    pub fn history_forward(&mut self) -> Option<(usize, usize)> {
+    /// Navigate forward in history - returns (feed_id, article_id)
+    pub fn history_forward(&mut self) -> Option<(Uuid, Uuid)> {
         if self.history_position < self.read_history.len() {
             self.history_position += 1;
             self.read_history.get(self.history_position - 1).copied()
         } else {
             None
         }
+    }
+
+    /// Find feed index by ID
+    pub fn find_feed_index(&self, feed_id: Uuid) -> Option<usize> {
+        self.feeds.iter().position(|f| f.id == feed_id)
+    }
+
+    /// Find article index by ID
+    pub fn find_article_index(&self, article_id: Uuid) -> Option<usize> {
+        self.articles.iter().position(|a| a.id == article_id)
     }
 
     // ========== Selection Methods ==========

@@ -48,14 +48,16 @@ pub struct CliProvider {
     cli_type: CliType,
     language: String,
     summary_max_length: usize,
+    min_content_length: usize,
 }
 
 impl CliProvider {
-    pub fn new(cli_type: CliType, language: &str, summary_max_length: usize) -> Self {
+    pub fn new(cli_type: CliType, language: &str, summary_max_length: usize, min_content_length: usize) -> Self {
         Self {
             cli_type,
             language: language.to_string(),
             summary_max_length,
+            min_content_length,
         }
     }
 
@@ -125,10 +127,11 @@ impl AiProvider for CliProvider {
 
     async fn summarize(&self, content: &str) -> Result<String> {
         let trimmed = content.trim();
-        if trimmed.len() < 1000 {
+        if trimmed.len() < self.min_content_length {
             return Err(Error::AiProvider(format!(
-                "Content too short to summarize ({} chars, minimum 1000)",
-                trimmed.len()
+                "Content too short to summarize ({} chars, minimum {})",
+                trimmed.len(),
+                self.min_content_length
             )));
         }
         if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
@@ -151,9 +154,10 @@ Summary (in {language}, max {max_len} chars):"
         let prompt_clone = prompt.clone();
         let cli_type = self.cli_type;
         let lang = self.language.clone();
+        let min_len = self.min_content_length;
 
         tokio::task::spawn_blocking(move || {
-            let provider = CliProvider::new(cli_type, &lang, max_len);
+            let provider = CliProvider::new(cli_type, &lang, max_len, min_len);
             provider.run_cli(&prompt_clone)
         })
         .await
@@ -180,9 +184,10 @@ Tags:"
         let cli_type = self.cli_type;
         let lang = self.language.clone();
         let max_len = self.summary_max_length;
+        let min_len = self.min_content_length;
 
         let result = tokio::task::spawn_blocking(move || {
-            let provider = CliProvider::new(cli_type, &lang, max_len);
+            let provider = CliProvider::new(cli_type, &lang, max_len, min_len);
             provider.run_cli(&prompt_clone)
         })
         .await
@@ -200,7 +205,7 @@ Tags:"
 
     async fn score_relevance(&self, content: &str, interests: &[String]) -> Result<f64> {
         if interests.is_empty() {
-            return Ok(0.5);
+            return Ok(1.0); // No user profile yet - pass article through
         }
 
         let truncated = truncate_chars(content, 3000);
@@ -217,9 +222,10 @@ Respond with only a number from 0 to 100, where 0 means not relevant at all and 
         let cli_type = self.cli_type;
         let lang = self.language.clone();
         let max_len = self.summary_max_length;
+        let min_len = self.min_content_length;
 
         let result = tokio::task::spawn_blocking(move || {
-            let provider = CliProvider::new(cli_type, &lang, max_len);
+            let provider = CliProvider::new(cli_type, &lang, max_len, min_len);
             provider.run_cli(&prompt_clone)
         })
         .await
@@ -275,9 +281,10 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         let prompt_clone = prompt;
         let cli_type = self.cli_type;
         let lang = self.language.clone();
+        let min_len_for_spawn = self.min_content_length;
 
         let result = tokio::task::spawn_blocking(move || {
-            let provider = CliProvider::new(cli_type, &lang, max_len);
+            let provider = CliProvider::new(cli_type, &lang, max_len, min_len_for_spawn);
             provider.run_cli(&prompt_clone)
         })
         .await
@@ -335,11 +342,13 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         }
 
         if interests.is_empty() {
+            // No user profile yet - pass all articles through (score 1.0)
+            tracing::info!("No user interests found, passing all {} articles through", articles.len());
             return Ok(articles
                 .into_iter()
                 .map(|a| BatchScoreResult {
                     id: a.id,
-                    score: Some(0.5),
+                    score: Some(1.0),
                     error: None,
                 })
                 .collect());
@@ -367,9 +376,10 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         let cli_type = self.cli_type;
         let lang = self.language.clone();
         let max_len = self.summary_max_length;
+        let min_len = self.min_content_length;
 
         let result = tokio::task::spawn_blocking(move || {
-            let provider = CliProvider::new(cli_type, &lang, max_len);
+            let provider = CliProvider::new(cli_type, &lang, max_len, min_len);
             provider.run_cli(&prompt_clone)
         })
         .await
@@ -411,11 +421,11 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
     }
 
     fn batch_char_limit(&self) -> usize {
-        80000 // ~20K tokens
+        200000 // ~100K tokens (conservative estimate: 2 chars/token for mixed content)
     }
 
     fn min_content_length(&self) -> usize {
-        1000
+        self.min_content_length
     }
 
     async fn classify_style(&self, content: &str) -> Result<ArticleStyleResult> {
@@ -432,9 +442,10 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         let cli_type = self.cli_type;
         let lang = self.language.clone();
         let max_len = self.summary_max_length;
+        let min_len = self.min_content_length;
 
         let result = tokio::task::spawn_blocking(move || {
-            let provider = CliProvider::new(cli_type, &lang, max_len);
+            let provider = CliProvider::new(cli_type, &lang, max_len, min_len);
             provider.run_cli(&prompt_clone)
         })
         .await

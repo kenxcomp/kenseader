@@ -41,13 +41,13 @@ impl Summarizer {
             }
             // CLI-based providers
             "gemini_cli" => {
-                Arc::new(CliProvider::new(CliType::Gemini, language, summary_max_length))
+                Arc::new(CliProvider::new(CliType::Gemini, language, summary_max_length, config.ai.min_summarize_length))
             }
             "codex_cli" => {
-                Arc::new(CliProvider::new(CliType::Codex, language, summary_max_length))
+                Arc::new(CliProvider::new(CliType::Codex, language, summary_max_length, config.ai.min_summarize_length))
             }
             "claude_cli" | _ => {
-                Arc::new(ClaudeCliProvider::new(language, summary_max_length))
+                Arc::new(ClaudeCliProvider::new(language, summary_max_length, config.ai.min_summarize_length))
             }
         };
 

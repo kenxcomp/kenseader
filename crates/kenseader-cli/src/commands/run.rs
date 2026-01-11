@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use uuid::Uuid;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -23,7 +24,7 @@ use kenseader_tui::{
     app::{App, Focus, Mode, RichArticleState, ViewMode},
     event::{AppEvent, EventHandler, ImageLoadResult, RefreshResult},
     input::{handle_key_event, Action},
-    rich_content::download_image,
+    rich_content::{download_image, FocusableItem},
     widgets::{
         ArticleDetailWidget, ArticleListWidget, ImageViewerWidget, PopupWidget, StatusBarWidget,
         SubscriptionsWidget,
@@ -61,6 +62,9 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
         .map(|d| d.join("kenseader"))
         .or_else(|| dirs::home_dir().map(|d| d.join(".kenseader")));
 
+    // Initialize preload cache with disk cache support
+    app.init_preload_cache(data_dir.as_ref());
+
     // Initialize rich state for the first article
     init_rich_article_state(&mut app, data_dir.as_ref());
 
@@ -80,6 +84,11 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
         // Process any completed refresh operations (non-blocking)
         while let Ok(result) = refresh_rx.try_recv() {
             handle_refresh_result(&mut app, result, &client, data_dir.as_ref()).await?;
+        }
+
+        // Preload images for nearby articles (when in article list view)
+        if app.focus == Focus::ArticleList && app.config.ui.image_preview {
+            process_preload(&mut app, &img_tx, data_dir.as_ref());
         }
 
         // Check if we need to load more images (visible-first strategy)
@@ -186,14 +195,18 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
 
 /// Handle completed image load result
 fn handle_image_result(app: &mut App, result: ImageLoadResult) {
-    if let Some(ref mut rich_state) = app.rich_state {
-        match result {
-            ImageLoadResult::Success {
-                url,
-                image,
-                bytes,
-                cache_path,
-            } => {
+    match result {
+        ImageLoadResult::Success {
+            url,
+            image,
+            bytes,
+            cache_path,
+        } => {
+            // Always update preload cache for future use
+            app.preload_cache.set_loaded(&url, image.clone(), cache_path.clone());
+
+            // Update current article's cache if it exists
+            if let Some(ref mut rich_state) = app.rich_state {
                 // Save to disk cache if we have bytes
                 if !bytes.is_empty() {
                     rich_state.image_cache.save_to_disk(&url, &bytes);
@@ -201,7 +214,13 @@ fn handle_image_result(app: &mut App, result: ImageLoadResult) {
                 // Store in memory cache with cache path
                 rich_state.image_cache.set_loaded(&url, image, cache_path);
             }
-            ImageLoadResult::Failure { url, error } => {
+        }
+        ImageLoadResult::Failure { url, error } => {
+            // Update preload cache
+            app.preload_cache.set_failed(&url, error.clone());
+
+            // Update current article's cache if it exists
+            if let Some(ref mut rich_state) = app.rich_state {
                 rich_state.image_cache.set_failed(&url, error);
             }
         }
@@ -285,6 +304,101 @@ fn spawn_image_load(
     });
 }
 
+/// Preload range: preload images for ±2 articles around current selection
+const PRELOAD_RANGE: usize = 2;
+/// Maximum concurrent preload requests per frame
+const MAX_PRELOAD_CONCURRENT: usize = 3;
+
+/// Process preloading of images for nearby articles
+fn process_preload(
+    app: &mut App,
+    tx: &mpsc::UnboundedSender<ImageLoadResult>,
+    data_dir: Option<&PathBuf>,
+) {
+    let range = app.get_preload_article_range(PRELOAD_RANGE);
+    let mut count = 0;
+
+    // Iterate through articles in the preload range
+    for idx in range {
+        if count >= MAX_PRELOAD_CONCURRENT {
+            break;
+        }
+
+        if let Some(article) = app.articles.get(idx).cloned() {
+            let urls = App::get_article_image_urls(&article);
+
+            for url in urls {
+                if count >= MAX_PRELOAD_CONCURRENT {
+                    break;
+                }
+
+                // Skip if already ready or loading
+                if app.preload_cache.is_ready(&url) || app.preload_cache.is_loading(&url) {
+                    continue;
+                }
+
+                // Also skip if current article's cache already has it
+                if let Some(ref rich_state) = app.rich_state {
+                    if rich_state.image_cache.is_ready(&url) || rich_state.image_cache.is_loading(&url) {
+                        continue;
+                    }
+                }
+
+                // Mark as loading and spawn download
+                app.preload_cache.start_loading(&url);
+                spawn_preload_image(url, tx.clone(), data_dir.cloned());
+                count += 1;
+            }
+        }
+    }
+}
+
+/// Spawn an async task to download an image for preloading
+fn spawn_preload_image(
+    url: String,
+    tx: mpsc::UnboundedSender<ImageLoadResult>,
+    data_dir: Option<PathBuf>,
+) {
+    // First, try disk cache synchronously
+    if let Some(ref dir) = data_dir {
+        if let Ok(disk_cache) = kenseader_tui::rich_content::ImageDiskCache::new(dir) {
+            if let Some(img) = disk_cache.load(&url) {
+                let cache_path = Some(disk_cache.cache_path(&url));
+                let _ = tx.send(ImageLoadResult::Success {
+                    url,
+                    image: img,
+                    bytes: Vec::new(),
+                    cache_path,
+                });
+                return;
+            }
+        }
+    }
+
+    // Spawn async download
+    let data_dir_clone = data_dir.clone();
+    tokio::spawn(async move {
+        match download_image(&url).await {
+            Ok((bytes, image)) => {
+                let cache_path = data_dir_clone.and_then(|dir| {
+                    kenseader_tui::rich_content::ImageDiskCache::new(&dir)
+                        .ok()
+                        .map(|dc| dc.cache_path(&url))
+                });
+                let _ = tx.send(ImageLoadResult::Success {
+                    url,
+                    image,
+                    bytes,
+                    cache_path,
+                });
+            }
+            Err(e) => {
+                let _ = tx.send(ImageLoadResult::Failure { url, error: e });
+            }
+        }
+    });
+}
+
 async fn load_feeds(app: &mut App) -> Result<()> {
     app.feeds = app.client.list_feeds().await?;
 
@@ -342,6 +456,41 @@ async fn load_articles_preserve_selection(app: &mut App, preserve: bool) -> Resu
     Ok(())
 }
 
+/// Load articles for history navigation - ignores unread-only filter to find the target article
+async fn load_articles_for_history(app: &mut App, target_article_id: Uuid) -> Result<bool> {
+    let feed_id = match app.current_feed() {
+        Some(feed) => feed.id,
+        None => return Ok(false),
+    };
+
+    // First try to find in current filtered list
+    let unread_only = matches!(app.view_mode, ViewMode::UnreadOnly);
+    app.articles = app.client.list_articles(Some(feed_id), unread_only).await?;
+
+    if let Some(idx) = app.find_article_index(target_article_id) {
+        app.selected_article = idx;
+        app.detail_scroll = 0;
+        app.clear_rich_state();
+        return Ok(true);
+    }
+
+    // If in unread-only mode and article not found, load all articles
+    if unread_only {
+        app.articles = app.client.list_articles(Some(feed_id), false).await?;
+
+        if let Some(idx) = app.find_article_index(target_article_id) {
+            app.selected_article = idx;
+            app.detail_scroll = 0;
+            app.clear_rich_state();
+            // Temporarily switch to All mode to show the article
+            app.view_mode = ViewMode::All;
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 /// Initialize rich content state for the current article
 fn init_rich_article_state(app: &mut App, data_dir: Option<&PathBuf>) {
     // Only initialize if image preview is enabled
@@ -358,13 +507,24 @@ fn init_rich_article_state(app: &mut App, data_dir: Option<&PathBuf>) {
         }
 
         // Parse HTML content or fall back to text
-        let rich_state = if let Some(ref html) = article.content {
+        let mut rich_state = if let Some(ref html) = article.content {
             RichArticleState::from_html(html, data_dir)
         } else if let Some(ref text) = article.content_text {
             RichArticleState::from_text(text, data_dir)
         } else {
             return; // No content to display
         };
+
+        // Pre-fill images from preload cache (makes images appear instantly)
+        for url in &rich_state.content.image_urls {
+            if let Some(cached) = app.preload_cache.get(url) {
+                rich_state.image_cache.set_loaded(
+                    url,
+                    cached.image.clone(),
+                    cached.cache_path.clone(),
+                );
+            }
+        }
 
         app.rich_state = Some(rich_state);
     } else {
@@ -450,6 +610,10 @@ async fn handle_action(
                 // Update visual selection if in visual mode
                 app.update_visual_selection_feeds();
             } else {
+                // Record history before switching articles in ArticleDetail
+                if app.focus == Focus::ArticleDetail && app.selected_article > 0 {
+                    app.push_history();
+                }
                 app.move_up();
                 // Update visual selection if in visual mode (for ArticleList)
                 if matches!(app.focus, Focus::ArticleList | Focus::ArticleDetail) {
@@ -458,6 +622,8 @@ async fn handle_action(
             }
 
             if app.focus == Focus::Subscriptions && prev_feed != app.selected_feed {
+                // Clear preload cache when switching feeds
+                app.preload_cache.clear();
                 load_articles(app).await?;
                 // Initialize rich state for the first article in the new feed
                 init_rich_article_state(app, data_dir);
@@ -466,6 +632,25 @@ async fn handle_action(
             if app.focus == Focus::ArticleList && prev_article != app.selected_article {
                 app.detail_scroll = 0; // Reset scroll to top
                 app.clear_rich_state();
+                init_rich_article_state(app, data_dir);
+            }
+            // Handle article change in ArticleDetail (with auto mark-read)
+            if app.focus == Focus::ArticleDetail && prev_article != app.selected_article {
+                app.detail_scroll = 0;
+                app.clear_rich_state();
+                // Auto mark-read
+                if let Some(article) = app.current_article() {
+                    if !article.is_read {
+                        let article_id = article.id;
+                        client.mark_read(article_id).await?;
+                        if let Some(article) = app.current_article_mut() {
+                            article.is_read = true;
+                        }
+                        if let Some(feed) = app.current_feed_mut() {
+                            feed.unread_count = feed.unread_count.saturating_sub(1);
+                        }
+                    }
+                }
                 init_rich_article_state(app, data_dir);
             }
         }
@@ -488,6 +673,10 @@ async fn handle_action(
                 // Update visual selection if in visual mode
                 app.update_visual_selection_feeds();
             } else {
+                // Record history before switching articles in ArticleDetail
+                if app.focus == Focus::ArticleDetail && app.selected_article < app.articles.len().saturating_sub(1) {
+                    app.push_history();
+                }
                 app.move_down();
                 // Update visual selection if in visual mode (for ArticleList)
                 if matches!(app.focus, Focus::ArticleList | Focus::ArticleDetail) {
@@ -496,6 +685,8 @@ async fn handle_action(
             }
 
             if app.focus == Focus::Subscriptions && prev_feed != app.selected_feed {
+                // Clear preload cache when switching feeds
+                app.preload_cache.clear();
                 load_articles(app).await?;
                 // Initialize rich state for the first article in the new feed
                 init_rich_article_state(app, data_dir);
@@ -504,6 +695,25 @@ async fn handle_action(
             if app.focus == Focus::ArticleList && prev_article != app.selected_article {
                 app.detail_scroll = 0; // Reset scroll to top
                 app.clear_rich_state();
+                init_rich_article_state(app, data_dir);
+            }
+            // Handle article change in ArticleDetail (with auto mark-read)
+            if app.focus == Focus::ArticleDetail && prev_article != app.selected_article {
+                app.detail_scroll = 0;
+                app.clear_rich_state();
+                // Auto mark-read
+                if let Some(article) = app.current_article() {
+                    if !article.is_read {
+                        let article_id = article.id;
+                        client.mark_read(article_id).await?;
+                        if let Some(article) = app.current_article_mut() {
+                            article.is_read = true;
+                        }
+                        if let Some(feed) = app.current_feed_mut() {
+                            feed.unread_count = feed.unread_count.saturating_sub(1);
+                        }
+                    }
+                }
                 init_rich_article_state(app, data_dir);
             }
         }
@@ -558,6 +768,11 @@ async fn handle_action(
             }
         }
         Action::JumpToTop => {
+            let prev_article = app.selected_article;
+            // Record history before jumping in ArticleDetail
+            if app.focus == Focus::ArticleDetail && app.selected_article > 0 {
+                app.push_history();
+            }
             app.jump_to_top();
             app.clear_pending_key();
             // Update visual selection if in visual mode
@@ -569,8 +784,31 @@ async fn handle_action(
                     app.update_visual_selection_feeds();
                 }
             }
+            // Handle article change in ArticleDetail (with auto mark-read)
+            if app.focus == Focus::ArticleDetail && prev_article != app.selected_article {
+                app.detail_scroll = 0;
+                app.clear_rich_state();
+                if let Some(article) = app.current_article() {
+                    if !article.is_read {
+                        let article_id = article.id;
+                        client.mark_read(article_id).await?;
+                        if let Some(article) = app.current_article_mut() {
+                            article.is_read = true;
+                        }
+                        if let Some(feed) = app.current_feed_mut() {
+                            feed.unread_count = feed.unread_count.saturating_sub(1);
+                        }
+                    }
+                }
+                init_rich_article_state(app, data_dir);
+            }
         }
         Action::JumpToBottom => {
+            let prev_article = app.selected_article;
+            // Record history before jumping in ArticleDetail
+            if app.focus == Focus::ArticleDetail && app.selected_article < app.articles.len().saturating_sub(1) {
+                app.push_history();
+            }
             app.jump_to_bottom();
             // Update visual selection if in visual mode
             match app.focus {
@@ -580,6 +818,24 @@ async fn handle_action(
                 Focus::Subscriptions => {
                     app.update_visual_selection_feeds();
                 }
+            }
+            // Handle article change in ArticleDetail (with auto mark-read)
+            if app.focus == Focus::ArticleDetail && prev_article != app.selected_article {
+                app.detail_scroll = 0;
+                app.clear_rich_state();
+                if let Some(article) = app.current_article() {
+                    if !article.is_read {
+                        let article_id = article.id;
+                        client.mark_read(article_id).await?;
+                        if let Some(article) = app.current_article_mut() {
+                            article.is_read = true;
+                        }
+                        if let Some(feed) = app.current_feed_mut() {
+                            feed.unread_count = feed.unread_count.saturating_sub(1);
+                        }
+                    }
+                }
+                init_rich_article_state(app, data_dir);
             }
         }
         Action::PendingG => {
@@ -867,29 +1123,47 @@ async fn handle_action(
             }
         }
         Action::HistoryBack => {
-            if let Some((feed_idx, article_idx)) = app.history_back() {
-                if feed_idx != app.selected_feed {
-                    app.selected_feed = feed_idx;
-                    load_articles(app).await?;
+            // Debug: show history state
+            let history_len = app.read_history.len();
+            let history_pos = app.history_position;
+
+            if let Some((feed_id, article_id)) = app.history_back() {
+                // Find feed by ID
+                if let Some(feed_idx) = app.find_feed_index(feed_id) {
+                    if feed_idx != app.selected_feed {
+                        app.selected_feed = feed_idx;
+                    }
+                    // Load articles and find the target article (ignores unread-only if needed)
+                    if load_articles_for_history(app, article_id).await? {
+                        init_rich_article_state(app, data_dir);
+                        app.set_status("← Back");
+                    } else {
+                        app.set_status(format!("Article not found (history: {}/{})", history_pos, history_len));
+                    }
+                } else {
+                    app.set_status(format!("Feed not found (history: {}/{})", history_pos, history_len));
                 }
-                app.selected_article = article_idx;
-                app.detail_scroll = 0;
-                app.clear_rich_state();
-                init_rich_article_state(app, data_dir);
-                app.set_status("← Back");
+            } else {
+                app.set_status(format!("No history to go back (pos: {}, len: {})", history_pos, history_len));
             }
         }
         Action::HistoryForward => {
-            if let Some((feed_idx, article_idx)) = app.history_forward() {
-                if feed_idx != app.selected_feed {
-                    app.selected_feed = feed_idx;
-                    load_articles(app).await?;
+            if let Some((feed_id, article_id)) = app.history_forward() {
+                // Find feed by ID
+                if let Some(feed_idx) = app.find_feed_index(feed_id) {
+                    if feed_idx != app.selected_feed {
+                        app.selected_feed = feed_idx;
+                    }
+                    // Load articles and find the target article (ignores unread-only if needed)
+                    if load_articles_for_history(app, article_id).await? {
+                        init_rich_article_state(app, data_dir);
+                        app.set_status("→ Forward");
+                    } else {
+                        app.set_status("Article not found in history");
+                    }
+                } else {
+                    app.set_status("Feed not found in history");
                 }
-                app.selected_article = article_idx;
-                app.detail_scroll = 0;
-                app.clear_rich_state();
-                init_rich_article_state(app, data_dir);
-                app.set_status("→ Forward");
             }
         }
         Action::ToggleSelect => {
@@ -968,7 +1242,7 @@ async fn handle_action(
                 let image_count = rich_state.content.image_urls.len();
                 if image_count > 0 {
                     // Use focused image index or default to first image
-                    let index = rich_state.focused_image.unwrap_or(0);
+                    let index = rich_state.focused_image_index().unwrap_or(0);
                     app.mode = Mode::ImageViewer(index);
                 } else {
                     app.set_status("No images in this article");
@@ -976,13 +1250,10 @@ async fn handle_action(
             }
         }
         Action::OpenImage => {
-            // Open image in external viewer
-            let image_index = match app.mode {
-                Mode::ImageViewer(idx) => Some(idx),
-                _ => app.rich_state.as_ref().and_then(|s| s.focused_image),
-            };
-
-            if let Some(idx) = image_index {
+            // Smart open: image -> external viewer, link -> browser
+            // First check if in ImageViewer mode
+            if let Mode::ImageViewer(idx) = app.mode {
+                // Open current image in external viewer
                 if let Some(ref rich_state) = app.rich_state {
                     if let Some(url) = rich_state.content.image_urls.get(idx) {
                         if let Some(cached) = rich_state.image_cache.get(url) {
@@ -1004,56 +1275,148 @@ async fn handle_action(
                         }
                     }
                 }
-            } else {
-                app.set_status("No image focused. Press Tab to focus an image.");
+            } else if let Some(ref rich_state) = app.rich_state {
+                // Normal mode: check focused item type
+                match rich_state.get_focused_item() {
+                    Some(FocusableItem::Image { url_index }) => {
+                        // Open image in external viewer
+                        if let Some(url) = rich_state.content.image_urls.get(*url_index) {
+                            if let Some(cached) = rich_state.image_cache.get(url) {
+                                if let Some(ref path) = cached.cache_path {
+                                    if path.exists() {
+                                        if let Err(e) = open::that(path) {
+                                            app.set_status(format!("Failed to open image: {}", e));
+                                        } else {
+                                            app.set_status("Opening image in external viewer...");
+                                        }
+                                    } else {
+                                        app.set_status("Image not cached locally");
+                                    }
+                                } else {
+                                    app.set_status("Image cache path not available");
+                                }
+                            } else {
+                                app.set_status("Image not loaded yet");
+                            }
+                        }
+                    }
+                    Some(FocusableItem::Link { url, text, .. }) => {
+                        // Open link in browser
+                        if let Err(e) = open::that(url) {
+                            app.set_status(format!("Failed to open link: {}", e));
+                        } else {
+                            let display = if text.len() > 30 {
+                                format!("{}...", &text[..27])
+                            } else {
+                                text.clone()
+                            };
+                            app.set_status(format!("Opening: {}", display));
+                        }
+                    }
+                    None => {
+                        app.set_status("No item focused. Press Tab to focus an item.");
+                    }
+                }
             }
         }
         Action::NextImage => {
-            if let Some(ref mut rich_state) = app.rich_state {
-                let count = rich_state.content.image_urls.len();
-                if count > 0 {
-                    match &mut app.mode {
-                        Mode::ImageViewer(idx) => {
-                            *idx = (*idx + 1) % count;
+            let status_msg: Option<String> = if let Some(ref mut rich_state) = app.rich_state {
+                let focusable_count = rich_state.content.focusable_items.len();
+                let image_count = rich_state.content.image_urls.len();
+
+                match &mut app.mode {
+                    Mode::ImageViewer(idx) => {
+                        // In image viewer mode, only navigate between images
+                        if image_count > 0 {
+                            *idx = (*idx + 1) % image_count;
                         }
-                        _ => {
-                            rich_state.focused_image = Some(
+                        None
+                    }
+                    _ => {
+                        // Navigate through all focusable items (images + links)
+                        if focusable_count > 0 {
+                            rich_state.focused_item = Some(
                                 rich_state
-                                    .focused_image
-                                    .map(|i| (i + 1) % count)
+                                    .focused_item
+                                    .map(|i| (i + 1) % focusable_count)
                                     .unwrap_or(0),
                             );
-                            let idx = rich_state.focused_image.unwrap();
-                            app.set_status(format!("Image {}/{}", idx + 1, count));
+
+                            // Show status based on item type
+                            let idx = rich_state.focused_item.unwrap();
+                            match &rich_state.content.focusable_items[idx] {
+                                FocusableItem::Image { url_index } => {
+                                    Some(format!("Image {}/{}", url_index + 1, image_count))
+                                }
+                                FocusableItem::Link { text, .. } => {
+                                    let display_text = if text.len() > 40 {
+                                        format!("{}...", &text[..37])
+                                    } else {
+                                        text.clone()
+                                    };
+                                    Some(format!("Link: {}", display_text))
+                                }
+                            }
+                        } else {
+                            Some("No focusable items in this article".to_string())
                         }
                     }
-                } else {
-                    app.set_status("No images in this article");
                 }
+            } else {
+                None
+            };
+            if let Some(msg) = status_msg {
+                app.set_status(msg);
             }
         }
         Action::PrevImage => {
-            if let Some(ref mut rich_state) = app.rich_state {
-                let count = rich_state.content.image_urls.len();
-                if count > 0 {
-                    match &mut app.mode {
-                        Mode::ImageViewer(idx) => {
-                            *idx = if *idx == 0 { count - 1 } else { *idx - 1 };
+            let status_msg: Option<String> = if let Some(ref mut rich_state) = app.rich_state {
+                let focusable_count = rich_state.content.focusable_items.len();
+                let image_count = rich_state.content.image_urls.len();
+
+                match &mut app.mode {
+                    Mode::ImageViewer(idx) => {
+                        // In image viewer mode, only navigate between images
+                        if image_count > 0 {
+                            *idx = if *idx == 0 { image_count - 1 } else { *idx - 1 };
                         }
-                        _ => {
-                            rich_state.focused_image = Some(
+                        None
+                    }
+                    _ => {
+                        // Navigate through all focusable items (images + links)
+                        if focusable_count > 0 {
+                            rich_state.focused_item = Some(
                                 rich_state
-                                    .focused_image
-                                    .map(|i| if i == 0 { count - 1 } else { i - 1 })
-                                    .unwrap_or(count - 1),
+                                    .focused_item
+                                    .map(|i| if i == 0 { focusable_count - 1 } else { i - 1 })
+                                    .unwrap_or(focusable_count - 1),
                             );
-                            let idx = rich_state.focused_image.unwrap();
-                            app.set_status(format!("Image {}/{}", idx + 1, count));
+
+                            // Show status based on item type
+                            let idx = rich_state.focused_item.unwrap();
+                            match &rich_state.content.focusable_items[idx] {
+                                FocusableItem::Image { url_index } => {
+                                    Some(format!("Image {}/{}", url_index + 1, image_count))
+                                }
+                                FocusableItem::Link { text, .. } => {
+                                    let display_text = if text.len() > 40 {
+                                        format!("{}...", &text[..37])
+                                    } else {
+                                        text.clone()
+                                    };
+                                    Some(format!("Link: {}", display_text))
+                                }
+                            }
+                        } else {
+                            Some("No focusable items in this article".to_string())
                         }
                     }
-                } else {
-                    app.set_status("No images in this article");
                 }
+            } else {
+                None
+            };
+            if let Some(msg) = status_msg {
+                app.set_status(msg);
             }
         }
         Action::ExitImageViewer => {

@@ -14,13 +14,15 @@ fn truncate_chars(input: &str, max_chars: usize) -> &str {
 pub struct ClaudeCliProvider {
     language: String,
     summary_max_length: usize,
+    min_content_length: usize,
 }
 
 impl ClaudeCliProvider {
-    pub fn new(language: &str, summary_max_length: usize) -> Self {
+    pub fn new(language: &str, summary_max_length: usize, min_content_length: usize) -> Self {
         Self {
             language: language.to_string(),
             summary_max_length,
+            min_content_length,
         }
     }
 
@@ -65,12 +67,13 @@ impl AiProvider for ClaudeCliProvider {
     }
 
     async fn summarize(&self, content: &str) -> Result<String> {
-        // Skip if content is too short (less than 1000 chars) or looks like just a URL
+        // Skip if content is too short or looks like just a URL
         let trimmed = content.trim();
-        if trimmed.len() < 1000 {
+        if trimmed.len() < self.min_content_length {
             return Err(Error::AiProvider(format!(
-                "Content too short to summarize ({} chars, minimum 1000)",
-                trimmed.len()
+                "Content too short to summarize ({} chars, minimum {})",
+                trimmed.len(),
+                self.min_content_length
             )));
         }
         if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
@@ -94,8 +97,9 @@ Summary (in {language}, max {max_len} chars):"
         // Run in blocking context since claude CLI is synchronous
         let prompt_clone = prompt.clone();
         let lang = language.clone();
+        let min_len = self.min_content_length;
         tokio::task::spawn_blocking(move || {
-            let provider = ClaudeCliProvider::new(&lang, max_len);
+            let provider = ClaudeCliProvider::new(&lang, max_len, min_len);
             provider.run_claude(&prompt_clone)
         })
         .await
@@ -123,8 +127,9 @@ Tags:"
         let prompt_clone = prompt.clone();
         let lang = language.clone();
         let max_len = self.summary_max_length;
+        let min_len = self.min_content_length;
         let result = tokio::task::spawn_blocking(move || {
-            let provider = ClaudeCliProvider::new(&lang, max_len);
+            let provider = ClaudeCliProvider::new(&lang, max_len, min_len);
             provider.run_claude(&prompt_clone)
         })
         .await
@@ -142,7 +147,7 @@ Tags:"
 
     async fn score_relevance(&self, content: &str, interests: &[String]) -> Result<f64> {
         if interests.is_empty() {
-            return Ok(0.5); // Neutral score if no interests defined
+            return Ok(1.0); // No user profile yet - pass article through
         }
 
         let truncated = truncate_chars(content, 3000);
@@ -158,8 +163,9 @@ Tags:"
         let prompt_clone = prompt.clone();
         let lang = language.clone();
         let max_len = self.summary_max_length;
+        let min_len = self.min_content_length;
         let result = tokio::task::spawn_blocking(move || {
-            let provider = ClaudeCliProvider::new(&lang, max_len);
+            let provider = ClaudeCliProvider::new(&lang, max_len, min_len);
             provider.run_claude(&prompt_clone)
         })
         .await
@@ -224,8 +230,9 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         // Run Claude
         let prompt_clone = prompt;
         let lang = language.clone();
+        let min_len_for_spawn = self.min_content_length;
         let result = tokio::task::spawn_blocking(move || {
-            let provider = ClaudeCliProvider::new(&lang, max_len);
+            let provider = ClaudeCliProvider::new(&lang, max_len, min_len_for_spawn);
             provider.run_claude(&prompt_clone)
         })
         .await
@@ -284,12 +291,13 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         }
 
         if interests.is_empty() {
-            // No interests defined, return neutral scores
+            // No user profile yet - pass all articles through (score 1.0)
+            tracing::info!("No user interests found, passing all {} articles through", articles.len());
             return Ok(articles
                 .into_iter()
                 .map(|a| BatchScoreResult {
                     id: a.id,
-                    score: Some(0.5),
+                    score: Some(1.0),
                     error: None,
                 })
                 .collect());
@@ -316,8 +324,9 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         let prompt_clone = prompt;
         let lang = self.language.clone();
         let max_len = self.summary_max_length;
+        let min_len = self.min_content_length;
         let result = tokio::task::spawn_blocking(move || {
-            let provider = ClaudeCliProvider::new(&lang, max_len);
+            let provider = ClaudeCliProvider::new(&lang, max_len, min_len);
             provider.run_claude(&prompt_clone)
         })
         .await
@@ -360,11 +369,11 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
     }
 
     fn batch_char_limit(&self) -> usize {
-        80000 // ~20K tokens for Claude
+        200000 // ~100K tokens (conservative estimate: 2 chars/token for mixed content)
     }
 
     fn min_content_length(&self) -> usize {
-        1000
+        self.min_content_length
     }
 
     async fn classify_style(&self, content: &str) -> Result<ArticleStyleResult> {
@@ -380,9 +389,10 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         let prompt_clone = prompt;
         let lang = self.language.clone();
         let max_len = self.summary_max_length;
+        let min_len = self.min_content_length;
 
         let result = tokio::task::spawn_blocking(move || {
-            let provider = ClaudeCliProvider::new(&lang, max_len);
+            let provider = ClaudeCliProvider::new(&lang, max_len, min_len);
             provider.run_claude(&prompt_clone)
         })
         .await
@@ -396,6 +406,6 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
 
 impl Default for ClaudeCliProvider {
     fn default() -> Self {
-        Self::new("English", 150)  // Default max_summary_length
+        Self::new("English", 150, 500)  // Default max_summary_length and min_content_length
     }
 }
