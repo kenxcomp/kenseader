@@ -437,10 +437,25 @@ async fn load_articles(app: &mut App) -> Result<()> {
 
 async fn load_articles_preserve_selection(app: &mut App, preserve: bool) -> Result<()> {
     if let Some(feed) = app.current_feed() {
+        let feed_idx = app.selected_feed;
         let unread_only = matches!(app.view_mode, ViewMode::UnreadOnly);
         let prev_selected = app.selected_article;
 
         app.articles = app.client.list_articles(Some(feed.id), unread_only).await?;
+
+        // Sync unread_count with actual article data
+        let actual_unread_count = if unread_only {
+            // In unread-only mode, all articles in the list are unread
+            app.articles.len() as u32
+        } else {
+            // In all mode, count articles where is_read = false
+            app.articles.iter().filter(|a| !a.is_read).count() as u32
+        };
+
+        // Update the feed's unread_count to match reality
+        if let Some(feed) = app.feeds.get_mut(feed_idx) {
+            feed.unread_count = actual_unread_count;
+        }
 
         if preserve && prev_selected < app.articles.len() {
             app.selected_article = prev_selected;

@@ -55,7 +55,7 @@ impl<'a> ProfileAnalyzer<'a> {
             // Get weighted tag scores from events
             let rows: Vec<(String, f64)> = sqlx::query_as(
                 r#"
-                SELECT at.tag, SUM(
+                SELECT at.tag, CAST(SUM(
                     CASE be.event_type
                         WHEN 'exposure' THEN 0.1
                         WHEN 'click' THEN 1.0
@@ -65,7 +65,7 @@ impl<'a> ProfileAnalyzer<'a> {
                         WHEN 'view_repeat' THEN 4.0
                         ELSE 0.5
                     END
-                ) as weight
+                ) AS REAL) as weight
                 FROM behavior_events be
                 JOIN article_tags at ON be.article_id = at.article_id
                 WHERE be.created_at >= ?
@@ -112,7 +112,7 @@ impl<'a> ProfileAnalyzer<'a> {
 
             let rows: Vec<(String, f64)> = sqlx::query_as(
                 r#"
-                SELECT feed_id, SUM(
+                SELECT feed_id, CAST(SUM(
                     CASE event_type
                         WHEN 'exposure' THEN 0.1
                         WHEN 'click' THEN 1.0
@@ -122,7 +122,7 @@ impl<'a> ProfileAnalyzer<'a> {
                         WHEN 'view_repeat' THEN 4.0
                         ELSE 0.5
                     END
-                ) as weight
+                ) AS REAL) as weight
                 FROM behavior_events
                 WHERE feed_id IS NOT NULL AND created_at >= ?
                 GROUP BY feed_id
@@ -166,7 +166,7 @@ impl<'a> ProfileAnalyzer<'a> {
 
             let rows: Vec<(String, f64)> = sqlx::query_as(
                 r#"
-                SELECT context_time_of_day, COUNT(*) as count
+                SELECT context_time_of_day, CAST(COUNT(*) AS REAL) as count
                 FROM behavior_events
                 WHERE event_type IN ('click', 'read_complete', 'save') AND created_at >= ?
                 GROUP BY context_time_of_day
@@ -210,7 +210,7 @@ impl<'a> ProfileAnalyzer<'a> {
             // Get weighted style type scores from events
             let rows: Vec<(String, f64)> = sqlx::query_as(
                 r#"
-                SELECT s.style_type, SUM(
+                SELECT s.style_type, CAST(SUM(
                     CASE be.event_type
                         WHEN 'exposure' THEN 0.1
                         WHEN 'click' THEN 1.0
@@ -220,7 +220,7 @@ impl<'a> ProfileAnalyzer<'a> {
                         WHEN 'view_repeat' THEN 4.0
                         ELSE 0.5
                     END
-                ) as weight
+                ) AS REAL) as weight
                 FROM behavior_events be
                 JOIN article_styles s ON be.article_id = s.article_id
                 WHERE be.created_at >= ? AND s.style_type IS NOT NULL

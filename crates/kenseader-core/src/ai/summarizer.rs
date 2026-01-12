@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tokio::sync::Semaphore;
+
 use super::providers::{
     AiProvider, ClaudeApiProvider, ClaudeCliProvider, CliProvider, CliType,
     GeminiApiProvider, OpenAiProvider,
@@ -9,9 +11,12 @@ use crate::config::AppConfig;
 use crate::Result;
 
 /// AI Summarizer that wraps the configured provider
+/// Uses a semaphore to limit concurrent AI operations and prevent file descriptor exhaustion
 pub struct Summarizer {
     provider: Arc<dyn AiProvider>,
     concurrency: usize,
+    /// Semaphore to limit concurrent AI operations
+    semaphore: Arc<Semaphore>,
 }
 
 impl Summarizer {
@@ -51,26 +56,39 @@ impl Summarizer {
             }
         };
 
-        Ok(Self { provider, concurrency })
+        // Create semaphore to limit concurrent AI operations
+        // This prevents file descriptor exhaustion from too many CLI processes
+        let semaphore = Arc::new(Semaphore::new(concurrency));
+
+        Ok(Self { provider, concurrency, semaphore })
     }
 
     /// Generate a summary for article content
     pub async fn summarize(&self, content: &str) -> Result<String> {
+        // Acquire semaphore permit to limit concurrent operations
+        let _permit = self.semaphore.acquire().await
+            .map_err(|_| crate::Error::Other("Semaphore closed".to_string()))?;
         self.provider.summarize(content).await
     }
 
     /// Extract tags from article content
     pub async fn extract_tags(&self, content: &str) -> Result<Vec<String>> {
+        let _permit = self.semaphore.acquire().await
+            .map_err(|_| crate::Error::Other("Semaphore closed".to_string()))?;
         self.provider.extract_tags(content).await
     }
 
     /// Score article relevance to user interests
     pub async fn score_relevance(&self, content: &str, interests: &[String]) -> Result<f64> {
+        let _permit = self.semaphore.acquire().await
+            .map_err(|_| crate::Error::Other("Semaphore closed".to_string()))?;
         self.provider.score_relevance(content, interests).await
     }
 
     /// Batch summarize multiple articles in one API call
     pub async fn batch_summarize(&self, articles: Vec<ArticleForSummary>) -> Result<Vec<BatchSummaryResult>> {
+        let _permit = self.semaphore.acquire().await
+            .map_err(|_| crate::Error::Other("Semaphore closed".to_string()))?;
         self.provider.batch_summarize(articles).await
     }
 
@@ -80,6 +98,8 @@ impl Summarizer {
         articles: Vec<ArticleForScoring>,
         interests: &[String],
     ) -> Result<Vec<BatchScoreResult>> {
+        let _permit = self.semaphore.acquire().await
+            .map_err(|_| crate::Error::Other("Semaphore closed".to_string()))?;
         self.provider.batch_score_relevance(articles, interests).await
     }
 
@@ -100,6 +120,8 @@ impl Summarizer {
 
     /// Classify article style, tone, and length category
     pub async fn classify_style(&self, content: &str) -> Result<ArticleStyleResult> {
+        let _permit = self.semaphore.acquire().await
+            .map_err(|_| crate::Error::Other("Semaphore closed".to_string()))?;
         self.provider.classify_style(content).await
     }
 }
