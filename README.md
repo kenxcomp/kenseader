@@ -145,7 +145,7 @@ kenseader daemon stop
 | Key | Action |
 |-----|--------|
 | `Enter` | Select article / Open fullscreen image viewer (in detail view) |
-| `b` | Open article in browser (in detail view) |
+| `b` | Open article in browser (article list/detail view) |
 | `s` | Toggle saved/bookmark |
 | `d` | Toggle read/unread (article list) / Delete subscription (feed list, with confirmation) |
 | `r` | Refresh feeds (async, non-blocking) |
@@ -175,7 +175,7 @@ Visual mode tips:
 | `Shift+Tab` | Focus previous image/link |
 | `Enter` | Open fullscreen image viewer |
 | `o` | Smart open: open focused link in browser, or focused image in external viewer |
-| `b` | Open article's main URL in browser |
+| `b` | Smart open: open focused link in browser, or article's main URL if nothing focused |
 
 Links in article content are displayed with blue underlined text. When focused, links are highlighted with a yellow background.
 

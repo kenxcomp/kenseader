@@ -111,7 +111,9 @@ pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
         }
 
         // Article actions
-        (KeyCode::Char('b'), KeyModifiers::NONE) if app.focus == Focus::ArticleDetail => {
+        (KeyCode::Char('b'), KeyModifiers::NONE)
+            if app.focus == Focus::ArticleDetail || app.focus == Focus::ArticleList =>
+        {
             Action::OpenInBrowser
         }
         // Image navigation (ArticleDetail)

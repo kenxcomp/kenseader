@@ -437,10 +437,25 @@ async fn load_articles(app: &mut App) -> Result<()> {
 
 async fn load_articles_preserve_selection(app: &mut App, preserve: bool) -> Result<()> {
     if let Some(feed) = app.current_feed() {
+        let feed_idx = app.selected_feed;
         let unread_only = matches!(app.view_mode, ViewMode::UnreadOnly);
         let prev_selected = app.selected_article;
 
         app.articles = app.client.list_articles(Some(feed.id), unread_only).await?;
+
+        // Sync unread_count with actual article data
+        let actual_unread_count = if unread_only {
+            // In unread-only mode, all articles in the list are unread
+            app.articles.len() as u32
+        } else {
+            // In all mode, count articles where is_read = false
+            app.articles.iter().filter(|a| !a.is_read).count() as u32
+        };
+
+        // Update the feed's unread_count to match reality
+        if let Some(feed) = app.feeds.get_mut(feed_idx) {
+            feed.unread_count = actual_unread_count;
+        }
 
         if preserve && prev_selected < app.articles.len() {
             app.selected_article = prev_selected;
@@ -866,10 +881,33 @@ async fn handle_action(
             }
         }
         Action::OpenInBrowser => {
-            if let Some(article) = app.current_article() {
-                if let Some(url) = &article.url {
+            // Smart open: if a link is focused, open that link; otherwise open article URL
+            let mut opened = false;
+
+            if let Some(ref rich_state) = app.rich_state {
+                if let Some(FocusableItem::Link { url, text, .. }) = rich_state.get_focused_item() {
+                    // Open focused link in browser
                     if let Err(e) = open::that(url) {
-                        app.set_status(format!("Failed to open browser: {}", e));
+                        app.set_status(format!("Failed to open link: {}", e));
+                    } else {
+                        let display = if text.len() > 30 {
+                            format!("{}...", &text[..27])
+                        } else {
+                            text.clone()
+                        };
+                        app.set_status(format!("Opening: {}", display));
+                    }
+                    opened = true;
+                }
+            }
+
+            // If no link focused, open article URL
+            if !opened {
+                if let Some(article) = app.current_article() {
+                    if let Some(url) = &article.url {
+                        if let Err(e) = open::that(url) {
+                            app.set_status(format!("Failed to open browser: {}", e));
+                        }
                     }
                 }
             }

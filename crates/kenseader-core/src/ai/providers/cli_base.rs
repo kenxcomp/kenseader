@@ -1,7 +1,11 @@
 use std::process::Command;
+use std::time::Duration;
 
 use super::{AiProvider, ArticleForScoring, ArticleForSummary, ArticleStyleResult, BatchScoreResult, BatchSummaryResult};
 use crate::{Error, Result};
+
+/// Default timeout for CLI operations (2 minutes)
+const CLI_TIMEOUT_SECS: u64 = 120;
 
 fn truncate_chars(input: &str, max_chars: usize) -> &str {
     match input.char_indices().nth(max_chars) {
@@ -156,12 +160,15 @@ Summary (in {language}, max {max_len} chars):"
         let lang = self.language.clone();
         let min_len = self.min_content_length;
 
-        tokio::task::spawn_blocking(move || {
+        let task = tokio::task::spawn_blocking(move || {
             let provider = CliProvider::new(cli_type, &lang, max_len, min_len);
             provider.run_cli(&prompt_clone)
-        })
-        .await
-        .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))?
+        });
+
+        tokio::time::timeout(Duration::from_secs(CLI_TIMEOUT_SECS), task)
+            .await
+            .map_err(|_| Error::AiProvider(format!("CLI timed out after {} seconds", CLI_TIMEOUT_SECS)))?
+            .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))?
     }
 
     async fn extract_tags(&self, content: &str) -> Result<Vec<String>> {
@@ -186,12 +193,15 @@ Tags:"
         let max_len = self.summary_max_length;
         let min_len = self.min_content_length;
 
-        let result = tokio::task::spawn_blocking(move || {
+        let task = tokio::task::spawn_blocking(move || {
             let provider = CliProvider::new(cli_type, &lang, max_len, min_len);
             provider.run_cli(&prompt_clone)
-        })
-        .await
-        .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(CLI_TIMEOUT_SECS), task)
+            .await
+            .map_err(|_| Error::AiProvider(format!("CLI timed out after {} seconds", CLI_TIMEOUT_SECS)))?
+            .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
 
         let tags: Vec<String> = result
             .split(',')
@@ -224,12 +234,15 @@ Respond with only a number from 0 to 100, where 0 means not relevant at all and 
         let max_len = self.summary_max_length;
         let min_len = self.min_content_length;
 
-        let result = tokio::task::spawn_blocking(move || {
+        let task = tokio::task::spawn_blocking(move || {
             let provider = CliProvider::new(cli_type, &lang, max_len, min_len);
             provider.run_cli(&prompt_clone)
-        })
-        .await
-        .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(CLI_TIMEOUT_SECS), task)
+            .await
+            .map_err(|_| Error::AiProvider(format!("CLI timed out after {} seconds", CLI_TIMEOUT_SECS)))?
+            .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
 
         let score: f64 = result.trim().parse().unwrap_or(50.0);
         Ok(score / 100.0)
@@ -283,12 +296,16 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         let lang = self.language.clone();
         let min_len_for_spawn = self.min_content_length;
 
-        let result = tokio::task::spawn_blocking(move || {
+        let task = tokio::task::spawn_blocking(move || {
             let provider = CliProvider::new(cli_type, &lang, max_len, min_len_for_spawn);
             provider.run_cli(&prompt_clone)
-        })
-        .await
-        .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
+        });
+
+        // Batch operations get longer timeout (3x normal)
+        let result = tokio::time::timeout(Duration::from_secs(CLI_TIMEOUT_SECS * 3), task)
+            .await
+            .map_err(|_| Error::AiProvider(format!("CLI batch timed out after {} seconds", CLI_TIMEOUT_SECS * 3)))?
+            .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
 
         // Parse results
         let mut summaries: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -378,12 +395,16 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         let max_len = self.summary_max_length;
         let min_len = self.min_content_length;
 
-        let result = tokio::task::spawn_blocking(move || {
+        let task = tokio::task::spawn_blocking(move || {
             let provider = CliProvider::new(cli_type, &lang, max_len, min_len);
             provider.run_cli(&prompt_clone)
-        })
-        .await
-        .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
+        });
+
+        // Batch operations get longer timeout (3x normal)
+        let result = tokio::time::timeout(Duration::from_secs(CLI_TIMEOUT_SECS * 3), task)
+            .await
+            .map_err(|_| Error::AiProvider(format!("CLI batch timed out after {} seconds", CLI_TIMEOUT_SECS * 3)))?
+            .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
 
         let mut scores: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
 
@@ -444,12 +465,15 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         let max_len = self.summary_max_length;
         let min_len = self.min_content_length;
 
-        let result = tokio::task::spawn_blocking(move || {
+        let task = tokio::task::spawn_blocking(move || {
             let provider = CliProvider::new(cli_type, &lang, max_len, min_len);
             provider.run_cli(&prompt_clone)
-        })
-        .await
-        .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(CLI_TIMEOUT_SECS), task)
+            .await
+            .map_err(|_| Error::AiProvider(format!("CLI timed out after {} seconds", CLI_TIMEOUT_SECS)))?
+            .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
 
         // Parse JSON response
         let cleaned = result.trim().trim_matches(|c| c == '`' || c == '\n');

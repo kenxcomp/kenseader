@@ -1,7 +1,11 @@
 use std::process::Command;
+use std::time::Duration;
 
 use super::{AiProvider, ArticleForScoring, ArticleForSummary, ArticleStyleResult, BatchScoreResult, BatchSummaryResult};
 use crate::{Error, Result};
+
+/// Default timeout for Claude CLI operations (2 minutes)
+const CLI_TIMEOUT_SECS: u64 = 120;
 
 fn truncate_chars(input: &str, max_chars: usize) -> &str {
     match input.char_indices().nth(max_chars) {
@@ -98,12 +102,16 @@ Summary (in {language}, max {max_len} chars):"
         let prompt_clone = prompt.clone();
         let lang = language.clone();
         let min_len = self.min_content_length;
-        tokio::task::spawn_blocking(move || {
+        let task = tokio::task::spawn_blocking(move || {
             let provider = ClaudeCliProvider::new(&lang, max_len, min_len);
             provider.run_claude(&prompt_clone)
-        })
-        .await
-        .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))?
+        });
+
+        // Add timeout to prevent hanging
+        tokio::time::timeout(Duration::from_secs(CLI_TIMEOUT_SECS), task)
+            .await
+            .map_err(|_| Error::AiProvider(format!("Claude CLI timed out after {} seconds", CLI_TIMEOUT_SECS)))?
+            .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))?
     }
 
     async fn extract_tags(&self, content: &str) -> Result<Vec<String>> {
@@ -128,12 +136,15 @@ Tags:"
         let lang = language.clone();
         let max_len = self.summary_max_length;
         let min_len = self.min_content_length;
-        let result = tokio::task::spawn_blocking(move || {
+        let task = tokio::task::spawn_blocking(move || {
             let provider = ClaudeCliProvider::new(&lang, max_len, min_len);
             provider.run_claude(&prompt_clone)
-        })
-        .await
-        .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(CLI_TIMEOUT_SECS), task)
+            .await
+            .map_err(|_| Error::AiProvider(format!("Claude CLI timed out after {} seconds", CLI_TIMEOUT_SECS)))?
+            .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
 
         let tags: Vec<String> = result
             .split(',')
@@ -164,12 +175,15 @@ Tags:"
         let lang = language.clone();
         let max_len = self.summary_max_length;
         let min_len = self.min_content_length;
-        let result = tokio::task::spawn_blocking(move || {
+        let task = tokio::task::spawn_blocking(move || {
             let provider = ClaudeCliProvider::new(&lang, max_len, min_len);
             provider.run_claude(&prompt_clone)
-        })
-        .await
-        .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(CLI_TIMEOUT_SECS), task)
+            .await
+            .map_err(|_| Error::AiProvider(format!("Claude CLI timed out after {} seconds", CLI_TIMEOUT_SECS)))?
+            .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
 
         // Parse the score
         let score: f64 = result
@@ -227,16 +241,20 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
             "Now provide summaries in {language} (max {max_len} chars each) using the format [ARTICLE_ID]: summary\n"
         ));
 
-        // Run Claude
+        // Run Claude with timeout
         let prompt_clone = prompt;
         let lang = language.clone();
         let min_len_for_spawn = self.min_content_length;
-        let result = tokio::task::spawn_blocking(move || {
+        let task = tokio::task::spawn_blocking(move || {
             let provider = ClaudeCliProvider::new(&lang, max_len, min_len_for_spawn);
             provider.run_claude(&prompt_clone)
-        })
-        .await
-        .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
+        });
+
+        // Batch operations get longer timeout (3x normal)
+        let result = tokio::time::timeout(Duration::from_secs(CLI_TIMEOUT_SECS * 3), task)
+            .await
+            .map_err(|_| Error::AiProvider(format!("Claude CLI batch timed out after {} seconds", CLI_TIMEOUT_SECS * 3)))?
+            .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
 
         // Parse results - look for [ID]: summary pattern
         let mut summaries: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -325,12 +343,16 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         let lang = self.language.clone();
         let max_len = self.summary_max_length;
         let min_len = self.min_content_length;
-        let result = tokio::task::spawn_blocking(move || {
+        let task = tokio::task::spawn_blocking(move || {
             let provider = ClaudeCliProvider::new(&lang, max_len, min_len);
             provider.run_claude(&prompt_clone)
-        })
-        .await
-        .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
+        });
+
+        // Batch operations get longer timeout (3x normal)
+        let result = tokio::time::timeout(Duration::from_secs(CLI_TIMEOUT_SECS * 3), task)
+            .await
+            .map_err(|_| Error::AiProvider(format!("Claude CLI batch timed out after {} seconds", CLI_TIMEOUT_SECS * 3)))?
+            .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
 
         // Parse results
         let mut scores: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
@@ -391,12 +413,15 @@ Format your response EXACTLY as follows, with each summary on its own line:\n\
         let max_len = self.summary_max_length;
         let min_len = self.min_content_length;
 
-        let result = tokio::task::spawn_blocking(move || {
+        let task = tokio::task::spawn_blocking(move || {
             let provider = ClaudeCliProvider::new(&lang, max_len, min_len);
             provider.run_claude(&prompt_clone)
-        })
-        .await
-        .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
+        });
+
+        let result = tokio::time::timeout(Duration::from_secs(CLI_TIMEOUT_SECS), task)
+            .await
+            .map_err(|_| Error::AiProvider(format!("Claude CLI timed out after {} seconds", CLI_TIMEOUT_SECS)))?
+            .map_err(|e| Error::AiProvider(format!("Task join error: {}", e)))??;
 
         // Parse JSON response
         let cleaned = result.trim().trim_matches(|c| c == '`' || c == '\n');
