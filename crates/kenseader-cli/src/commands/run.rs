@@ -881,10 +881,33 @@ async fn handle_action(
             }
         }
         Action::OpenInBrowser => {
-            if let Some(article) = app.current_article() {
-                if let Some(url) = &article.url {
+            // Smart open: if a link is focused, open that link; otherwise open article URL
+            let mut opened = false;
+
+            if let Some(ref rich_state) = app.rich_state {
+                if let Some(FocusableItem::Link { url, text, .. }) = rich_state.get_focused_item() {
+                    // Open focused link in browser
                     if let Err(e) = open::that(url) {
-                        app.set_status(format!("Failed to open browser: {}", e));
+                        app.set_status(format!("Failed to open link: {}", e));
+                    } else {
+                        let display = if text.len() > 30 {
+                            format!("{}...", &text[..27])
+                        } else {
+                            text.clone()
+                        };
+                        app.set_status(format!("Opening: {}", display));
+                    }
+                    opened = true;
+                }
+            }
+
+            // If no link focused, open article URL
+            if !opened {
+                if let Some(article) = app.current_article() {
+                    if let Some(url) = &article.url {
+                        if let Err(e) = open::that(url) {
+                            app.set_status(format!("Failed to open browser: {}", e));
+                        }
                     }
                 }
             }
