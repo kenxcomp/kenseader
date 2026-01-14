@@ -139,6 +139,8 @@ kenseader daemon stop
 | `Ctrl+u` | Scroll half page up |
 | `Ctrl+f` | Scroll full page down |
 | `Ctrl+b` | Scroll full page up |
+| `Ctrl+j` | Next article (in detail view, respects unread-only mode) |
+| `Ctrl+k` | Previous article (in detail view, respects unread-only mode) |
 
 ### Actions
 
