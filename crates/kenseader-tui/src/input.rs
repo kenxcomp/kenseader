@@ -39,6 +39,9 @@ pub enum Action {
     NextImage,        // Tab/n: focus/navigate to next image
     PrevImage,        // Shift+Tab/p: focus/navigate to previous image
     ExitImageViewer,  // q/Esc: exit fullscreen image viewer
+    // Article navigation (ArticleDetail only, respects UnreadOnly mode)
+    NextArticle,      // Ctrl+J: Switch to next article
+    PrevArticle,      // Ctrl+K: Switch to previous article
     ExitMode,
     Confirm,
     Cancel,
@@ -88,6 +91,14 @@ pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
         (KeyCode::Char('u'), KeyModifiers::CONTROL) => Action::ScrollHalfPageUp,
         (KeyCode::Char('f'), KeyModifiers::CONTROL) => Action::ScrollPageDown,
         (KeyCode::Char('b'), KeyModifiers::CONTROL) => Action::ScrollPageUp,
+
+        // Article navigation (ArticleDetail only, respects UnreadOnly mode)
+        (KeyCode::Char('j'), KeyModifiers::CONTROL) if app.focus == Focus::ArticleDetail => {
+            Action::NextArticle
+        }
+        (KeyCode::Char('k'), KeyModifiers::CONTROL) if app.focus == Focus::ArticleDetail => {
+            Action::PrevArticle
+        }
 
         // Jump to top/bottom
         (KeyCode::Char('g'), KeyModifiers::NONE) => {

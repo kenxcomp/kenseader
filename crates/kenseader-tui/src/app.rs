@@ -453,6 +453,28 @@ impl App {
         }
     }
 
+    /// Find index of next unread article after current position
+    /// Returns None if no unread article exists after current
+    pub fn find_next_unread_article(&self) -> Option<usize> {
+        for i in (self.selected_article + 1)..self.articles.len() {
+            if !self.articles[i].is_read {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Find index of previous unread article before current position
+    /// Returns None if no unread article exists before current
+    pub fn find_prev_unread_article(&self) -> Option<usize> {
+        for i in (0..self.selected_article).rev() {
+            if !self.articles[i].is_read {
+                return Some(i);
+            }
+        }
+        None
+    }
+
     /// Scroll down by half page (uses viewport_height for adaptive scroll)
     pub fn scroll_half_page_down(&mut self) {
         let half_page = (self.viewport_height / 2).max(1);

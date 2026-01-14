@@ -732,6 +732,90 @@ async fn handle_action(
                 init_rich_article_state(app, data_dir);
             }
         }
+        Action::NextArticle => {
+            if app.focus != Focus::ArticleDetail {
+                return Ok(());
+            }
+
+            // Find next article index based on view mode
+            let next_idx = if matches!(app.view_mode, ViewMode::UnreadOnly) {
+                // In UnreadOnly mode, find next unread article
+                app.find_next_unread_article()
+            } else {
+                // In All mode, just go to next article
+                if app.selected_article < app.articles.len().saturating_sub(1) {
+                    Some(app.selected_article + 1)
+                } else {
+                    None
+                }
+            };
+
+            // If found, navigate to it
+            if let Some(idx) = next_idx {
+                app.push_history();
+                app.selected_article = idx;
+                app.detail_scroll = 0;
+                app.clear_rich_state();
+
+                // Auto mark-read
+                if let Some(article) = app.current_article() {
+                    if !article.is_read {
+                        let article_id = article.id;
+                        client.mark_read(article_id).await?;
+                        if let Some(article) = app.current_article_mut() {
+                            article.is_read = true;
+                        }
+                        if let Some(feed) = app.current_feed_mut() {
+                            feed.unread_count = feed.unread_count.saturating_sub(1);
+                        }
+                    }
+                }
+                init_rich_article_state(app, data_dir);
+            }
+            // If None (no valid next article), stay on current - do nothing
+        }
+        Action::PrevArticle => {
+            if app.focus != Focus::ArticleDetail {
+                return Ok(());
+            }
+
+            // Find previous article index based on view mode
+            let prev_idx = if matches!(app.view_mode, ViewMode::UnreadOnly) {
+                // In UnreadOnly mode, find previous unread article
+                app.find_prev_unread_article()
+            } else {
+                // In All mode, just go to previous article
+                if app.selected_article > 0 {
+                    Some(app.selected_article - 1)
+                } else {
+                    None
+                }
+            };
+
+            // If found, navigate to it
+            if let Some(idx) = prev_idx {
+                app.push_history();
+                app.selected_article = idx;
+                app.detail_scroll = 0;
+                app.clear_rich_state();
+
+                // Auto mark-read
+                if let Some(article) = app.current_article() {
+                    if !article.is_read {
+                        let article_id = article.id;
+                        client.mark_read(article_id).await?;
+                        if let Some(article) = app.current_article_mut() {
+                            article.is_read = true;
+                        }
+                        if let Some(feed) = app.current_feed_mut() {
+                            feed.unread_count = feed.unread_count.saturating_sub(1);
+                        }
+                    }
+                }
+                init_rich_article_state(app, data_dir);
+            }
+            // If None (no valid prev article), stay on current - do nothing
+        }
         Action::ScrollHalfPageDown => {
             app.scroll_half_page_down();
             // Update visual selection if in visual mode
