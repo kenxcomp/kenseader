@@ -57,10 +57,8 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
     // Create event handler
     let event_handler = EventHandler::new(config.ui.tick_rate_ms);
 
-    // Get data directory for disk cache
-    let data_dir = dirs::data_dir()
-        .map(|d| d.join("kenseader"))
-        .or_else(|| dirs::home_dir().map(|d| d.join(".kenseader")));
+    // Get data directory for disk cache (use configured data_dir)
+    let data_dir = Some(config.data_dir());
 
     // Initialize preload cache with disk cache support
     app.init_preload_cache(data_dir.as_ref());

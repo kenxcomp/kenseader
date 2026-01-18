@@ -737,6 +737,44 @@ If memory usage is high with many images:
 - Restart the application to clear memory cache
 - Disk cache persists between sessions
 
+## Cloud Sync (iCloud/Dropbox/etc.)
+
+To sync your RSS data across devices (e.g., Mac + future iOS app):
+
+1. Edit `~/.config/kenseader/config.toml`
+2. Set `data_dir` to your cloud storage path:
+
+   ```toml
+   [general]
+   # iCloud (macOS)
+   data_dir = "~/Library/Mobile Documents/com~apple~CloudDocs/kenseader"
+
+   # Or Dropbox
+   # data_dir = "~/Dropbox/kenseader"
+   ```
+
+3. Restart the daemon: `kenseader daemon stop && kenseader daemon start`
+
+### Features
+
+- **Tilde Expansion**: Paths support `~` for home directory (e.g., `~/Dropbox/kenseader`)
+- **Auto Migration**: When you change `data_dir`, existing data is automatically migrated to the new location
+- **Conflict Detection**: If the new path already has a database file, the daemon will report an error instead of overwriting
+
+### What Gets Synced
+
+| Item | Synced | Notes |
+|------|--------|-------|
+| Database (`kenseader.db`) | Yes | Contains feeds, articles, read status, summaries |
+| Image Cache (`image_cache/`) | Yes | Cached article images |
+| Socket File (`kenseader.sock`) | No | Local IPC only |
+| PID File (`daemon.pid`) | No | Local process tracking |
+
+### Notes
+
+- The config file (`~/.config/kenseader/config.toml`) is NOT synced - it stays local
+- For future iOS development: The SQLite database can be read directly by iOS apps using libraries like GRDB.swift or SQLite.swift
+
 ## License
 
 MIT

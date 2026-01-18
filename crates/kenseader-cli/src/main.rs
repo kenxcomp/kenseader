@@ -86,6 +86,11 @@ async fn main() -> Result<()> {
     // Load configuration
     let config = Arc::new(AppConfig::load()?);
 
+    // Check if this is a daemon start command - run migration before database init
+    if let Some(Commands::Daemon { action: DaemonAction::Start }) = &cli.command {
+        commands::daemon::maybe_migrate_data(&config)?;
+    }
+
     // Initialize database
     let db = Arc::new(Database::new(&config).await?);
 

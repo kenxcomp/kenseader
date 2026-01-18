@@ -1,8 +1,19 @@
 # Kenseader Configuration File
 
 [general]
-# Data directory (default: OS-specific local data directory)
-# data_dir = "~/.local/share/kenseader"
+# Data directory for database, socket, and image cache
+# Supports ~ for home directory expansion
+#
+# If you change this path, data will be automatically migrated on next daemon start.
+#
+# Examples:
+#   Default:  (uses OS-specific local data directory)
+#   Linux:    "~/.local/share/kenseader"
+#   macOS:    "~/Library/Application Support/kenseader"
+#   iCloud:   "~/Library/Mobile Documents/com~apple~CloudDocs/kenseader"
+#   Dropbox:  "~/Dropbox/kenseader"
+#
+# data_dir = "~/your/path/kenseader"
 
 # Article retention in days (articles older than this are auto-deleted)
 article_retention_days = 3

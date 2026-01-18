@@ -1,9 +1,9 @@
 use std::fs;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use tokio::sync::watch;
 use tracing::{info, warn};
 
@@ -75,6 +75,132 @@ fn write_pid_file() -> Result<()> {
 /// Remove PID file
 fn remove_pid_file() {
     let _ = fs::remove_file(pid_file_path());
+}
+
+/// Get the path to the file that stores the last used data_dir
+fn last_data_dir_path() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".config")
+        .join("kenseader")
+        .join("last_data_dir")
+}
+
+/// Read the last used data_dir from record file
+fn read_last_data_dir() -> Option<PathBuf> {
+    let path = last_data_dir_path();
+    fs::read_to_string(&path)
+        .ok()
+        .map(|s| PathBuf::from(s.trim()))
+}
+
+/// Write the current data_dir to record file
+fn write_last_data_dir(data_dir: &Path) -> Result<()> {
+    let path = last_data_dir_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, data_dir.to_string_lossy().as_bytes())?;
+    Ok(())
+}
+
+/// Recursively copy a directory
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_all(&src_path, &dst_path)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Migrate data from old data_dir to new data_dir
+fn migrate_data_dir(old_dir: &Path, new_dir: &Path) -> Result<()> {
+    // Files/directories to migrate
+    let items_to_migrate = ["kenseader.db", "image_cache"];
+
+    // Check if new path already has data (conflict)
+    let db_in_new = new_dir.join("kenseader.db");
+    if db_in_new.exists() {
+        return Err(anyhow!(
+            "Data conflict: {} already exists.\n\
+             Please manually resolve the conflict:\n\
+             - Delete or rename the existing file, or\n\
+             - Use a different data_dir path",
+            db_in_new.display()
+        ));
+    }
+
+    // Create new directory if needed
+    fs::create_dir_all(new_dir)?;
+
+    // Migrate each item
+    for item in &items_to_migrate {
+        let old_path = old_dir.join(item);
+        let new_path = new_dir.join(item);
+
+        if old_path.exists() {
+            if old_path.is_dir() {
+                // Copy directory recursively
+                copy_dir_all(&old_path, &new_path)?;
+            } else {
+                // Copy file
+                fs::copy(&old_path, &new_path)?;
+            }
+            info!("Migrated {} -> {}", old_path.display(), new_path.display());
+        }
+    }
+
+    Ok(())
+}
+
+/// Check and perform data migration if needed.
+/// This must be called BEFORE Database::new() to ensure proper migration.
+pub fn maybe_migrate_data(config: &AppConfig) -> Result<()> {
+    let current_data_dir = config.data_dir();
+    let default_data_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("kenseader");
+
+    if let Some(last_data_dir) = read_last_data_dir() {
+        // Case 1: We have a record of the last used data_dir
+        if last_data_dir != current_data_dir {
+            println!("Data directory changed:");
+            println!("  Old: {}", last_data_dir.display());
+            println!("  New: {}", current_data_dir.display());
+
+            // Check if old directory has data to migrate
+            let old_db = last_data_dir.join("kenseader.db");
+            if old_db.exists() {
+                println!("Migrating data from old directory...");
+                migrate_data_dir(&last_data_dir, &current_data_dir)?;
+                println!("Migration completed successfully.");
+            }
+        }
+    } else {
+        // Case 2: No record exists (first time using this feature)
+        // Check if default data dir has data and config points elsewhere
+        let default_db = default_data_dir.join("kenseader.db");
+        if default_db.exists() && default_data_dir != current_data_dir {
+            println!("First time migration detected:");
+            println!("  Default data location: {}", default_data_dir.display());
+            println!("  Configured location: {}", current_data_dir.display());
+            println!("Migrating data from default directory...");
+            migrate_data_dir(&default_data_dir, &current_data_dir)?;
+            println!("Migration completed successfully.");
+        }
+    }
+
+    // Record current data_dir for future comparison
+    write_last_data_dir(&current_data_dir)?;
+
+    Ok(())
 }
 
 /// Start the daemon
