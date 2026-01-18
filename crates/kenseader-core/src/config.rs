@@ -301,6 +301,22 @@ fn default_rsshub_base_url() -> String {
     "https://hub.slarker.me".to_string()
 }
 
+/// Expand tilde (~) in path to user's home directory
+fn expand_tilde(path: &std::path::Path) -> PathBuf {
+    if let Some(path_str) = path.to_str() {
+        if let Some(stripped) = path_str.strip_prefix("~/") {
+            if let Some(home) = dirs::home_dir() {
+                return home.join(stripped);
+            }
+        } else if path_str == "~" {
+            if let Some(home) = dirs::home_dir() {
+                return home;
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
 impl AppConfig {
     /// Load configuration from file or return defaults
     pub fn load() -> crate::Result<Self> {
@@ -342,16 +358,16 @@ impl AppConfig {
 
     /// Get the database file path
     pub fn database_path(&self) -> PathBuf {
-        self.general.data_dir.join("kenseader.db")
+        self.data_dir().join("kenseader.db")
     }
 
     /// Get the Unix socket path for IPC
     pub fn socket_path(&self) -> PathBuf {
-        self.general.data_dir.join("kenseader.sock")
+        self.data_dir().join("kenseader.sock")
     }
 
-    /// Get the data directory
-    pub fn data_dir(&self) -> &PathBuf {
-        &self.general.data_dir
+    /// Get the data directory (with tilde expansion)
+    pub fn data_dir(&self) -> PathBuf {
+        expand_tilde(&self.general.data_dir)
     }
 }

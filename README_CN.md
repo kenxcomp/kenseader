@@ -724,6 +724,44 @@ filter_interval_secs = 120
 - 重启应用可清空内存缓存
 - 磁盘缓存会在会话间保留
 
+## 云同步（iCloud/Dropbox 等）
+
+将 RSS 数据同步到多设备（如 Mac + 未来的 iOS 应用）：
+
+1. 编辑 `~/.config/kenseader/config.toml`
+2. 设置 `data_dir` 为云存储路径：
+
+   ```toml
+   [general]
+   # iCloud (macOS)
+   data_dir = "~/Library/Mobile Documents/com~apple~CloudDocs/kenseader"
+
+   # 或 Dropbox
+   # data_dir = "~/Dropbox/kenseader"
+   ```
+
+3. 重启守护进程：`kenseader daemon stop && kenseader daemon start`
+
+### 功能特性
+
+- **波浪线展开**：路径支持 `~` 表示用户主目录（如 `~/Dropbox/kenseader`）
+- **自动迁移**：修改 `data_dir` 时，现有数据会自动迁移到新位置
+- **冲突检测**：如果新路径已存在数据库文件，守护进程会报错而非覆盖
+
+### 同步内容
+
+| 项目 | 是否同步 | 备注 |
+|------|----------|------|
+| 数据库 (`kenseader.db`) | 是 | 包含订阅源、文章、阅读状态、摘要等 |
+| 图片缓存 (`image_cache/`) | 是 | 缓存的文章图片 |
+| Socket 文件 (`kenseader.sock`) | 否 | 仅用于本地 IPC |
+| PID 文件 (`daemon.pid`) | 否 | 本地进程跟踪 |
+
+### 注意事项
+
+- 配置文件（`~/.config/kenseader/config.toml`）不会被同步，保持本地独立
+- 未来 iOS 开发：SQLite 数据库可以直接被 iOS 应用读取（使用 GRDB.swift 或 SQLite.swift 等库）
+
 ## 许可证
 
 MIT
