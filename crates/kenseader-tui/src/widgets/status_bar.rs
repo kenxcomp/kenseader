@@ -23,11 +23,14 @@ impl StatusBarWidget {
             Focus::Subscriptions => app.selected_feeds.len(),
         };
 
+        // Read-mode prefix
+        let read_mode_prefix = if app.read_mode { "[READ] " } else { "" };
+
         let mode_str: String = if app.is_refreshing {
             // Show animated spinner with SYNCING text
-            format!("{} SYNCING", app.current_spinner())
+            format!("{}{} SYNCING", read_mode_prefix, app.current_spinner())
         } else {
-            match &app.mode {
+            let base_mode = match &app.mode {
                 Mode::Normal => {
                     if is_visual {
                         "VISUAL".to_string()
@@ -44,7 +47,8 @@ impl StatusBarWidget {
                 Mode::BatchDeleteConfirm => "CONFIRM".to_string(),
                 Mode::Help => "HELP".to_string(),
                 Mode::ImageViewer(_) => "IMAGE".to_string(),
-            }
+            };
+            format!("{}{}", read_mode_prefix, base_mode)
         };
 
         // Selection info

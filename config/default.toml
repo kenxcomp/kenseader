@@ -124,3 +124,72 @@ base_url = "https://hub.slarker.me"
 
 # RSSHub access key (for protected instances that require authentication)
 # access_key = "your_access_key_here"
+
+[keymap]
+# Configurable keybindings using Vim-style notation
+# Format: "j" (simple key), "G" (uppercase/shift), "<C-j>" (Ctrl+j), "<S-Tab>" (Shift+Tab)
+# Special keys: <CR>, <Enter>, <Esc>, <Tab>, <Space>, <Left>, <Right>, <Up>, <Down>
+
+# Application control
+quit = "q"                    # Quit the application (Ctrl+C always works)
+
+# Navigation between panels
+focus_left = "h"              # Move focus to left panel
+focus_right = "l"             # Move focus to right panel
+
+# Navigation within panel
+move_down = "j"               # Move cursor down
+move_up = "k"                 # Move cursor up
+
+# Scrolling (ArticleDetail view)
+scroll_half_down = "<C-d>"    # Scroll down half page
+scroll_half_up = "<C-u>"      # Scroll up half page
+scroll_page_down = "<C-f>"    # Scroll down full page
+scroll_page_up = "<C-b>"      # Scroll up full page
+
+# Article navigation (ArticleDetail only)
+next_article = "<C-j>"        # Switch to next article (respects UnreadOnly mode)
+prev_article = "<C-k>"        # Switch to previous article (respects UnreadOnly mode)
+
+# Jump to top/bottom
+jump_to_top = "gg"            # Jump to first item (double-g like Vim)
+jump_to_bottom = "G"          # Jump to last item (Shift+g)
+
+# Actions
+select = "<CR>"               # Select/enter item (Enter key)
+open_browser = "b"            # Open article in browser
+toggle_saved = "s"            # Toggle article saved status
+refresh = "r"                 # Refresh feeds (disabled in read-mode)
+toggle_read = "d"             # Toggle article read/unread (or delete feed in Subscriptions)
+
+# Search
+search_forward = "/"          # Start forward search
+search_backward = "?"         # Start backward search
+next_match = "n"              # Go to next search match
+prev_match = "N"              # Go to previous search match (Shift+n)
+
+# View mode
+toggle_unread_only = "i"      # Toggle between All and Unread-only view
+
+# History
+history_back = "u"            # Navigate back in history
+history_forward = "<C-r>"     # Navigate forward in history
+
+# Selection (batch operations)
+toggle_select = "<Space>"     # Toggle selection and move to next
+visual_mode = "v"             # Enter/exit visual selection mode
+
+# Image/link navigation (ArticleDetail view)
+open_item = "o"               # Open focused image in external viewer or link in browser
+view_image = "<CR>"           # Enter fullscreen image viewer (Enter key)
+next_item = "<Tab>"           # Focus next image or link
+prev_item = "<S-Tab>"         # Focus previous image or link (Shift+Tab)
+
+# Example: Colemak-friendly keybindings
+# [keymap]
+# move_down = "n"             # was: j
+# move_up = "e"               # was: k
+# focus_left = "m"            # was: h
+# focus_right = "i"           # was: l
+# next_article = "<C-n>"      # was: <C-j>
+# prev_article = "<C-e>"      # was: <C-k>

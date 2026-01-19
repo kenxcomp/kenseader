@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{App, Focus, Mode};
+use crate::keymap::{KeyBinding, Keymap};
 
 /// Input action that can be performed
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +52,8 @@ pub enum Action {
 }
 
 /// Handle a key event and return the corresponding action
-pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
+/// Uses the provided keymap for dynamic key binding lookup
+pub fn handle_key_event(key: KeyEvent, app: &App, keymap: &Keymap) -> Action {
     // Handle input mode (search)
     if app.is_input_mode() {
         return handle_input_mode(key);
@@ -64,55 +66,51 @@ pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
             // Any key exits help
             return Action::ExitMode;
         }
-        Mode::ImageViewer(_) => return handle_image_viewer_mode(key),
+        Mode::ImageViewer(_) => return handle_image_viewer_mode(key, keymap),
         _ => {}
     }
 
-    // Normal mode keybindings
-    match (key.code, key.modifiers) {
-        // Quit
-        (KeyCode::Char('q'), KeyModifiers::NONE) => Action::Quit,
-        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Action::Quit,
+    // Create key binding from event
+    let binding = KeyBinding::new(key.code, key.modifiers);
 
-        // Navigation between panels
-        (KeyCode::Char('h'), KeyModifiers::NONE) => Action::FocusLeft,
-        (KeyCode::Char('l'), KeyModifiers::NONE) => Action::FocusRight,
-        (KeyCode::Left, KeyModifiers::NONE) => Action::FocusLeft,
-        (KeyCode::Right, KeyModifiers::NONE) => Action::FocusRight,
-
-        // Navigation within panel
-        (KeyCode::Char('j'), KeyModifiers::NONE) => Action::MoveDown,
-        (KeyCode::Char('k'), KeyModifiers::NONE) => Action::MoveUp,
-        (KeyCode::Down, KeyModifiers::NONE) => Action::MoveDown,
-        (KeyCode::Up, KeyModifiers::NONE) => Action::MoveUp,
-
-        // Scrolling
-        (KeyCode::Char('d'), KeyModifiers::CONTROL) => Action::ScrollHalfPageDown,
-        (KeyCode::Char('u'), KeyModifiers::CONTROL) => Action::ScrollHalfPageUp,
-        (KeyCode::Char('f'), KeyModifiers::CONTROL) => Action::ScrollPageDown,
-        (KeyCode::Char('b'), KeyModifiers::CONTROL) => Action::ScrollPageUp,
-
-        // Article navigation (ArticleDetail only, respects UnreadOnly mode)
-        (KeyCode::Char('j'), KeyModifiers::CONTROL) if app.focus == Focus::ArticleDetail => {
-            Action::NextArticle
-        }
-        (KeyCode::Char('k'), KeyModifiers::CONTROL) if app.focus == Focus::ArticleDetail => {
-            Action::PrevArticle
-        }
-
-        // Jump to top/bottom
-        (KeyCode::Char('g'), KeyModifiers::NONE) => {
-            // gg requires double press
+    // Handle "gg" sequence for jump-to-top
+    if keymap.has_pending_g() {
+        if binding.code == KeyCode::Char('g') && binding.modifiers == KeyModifiers::NONE {
             if app.pending_key == Some('g') {
-                Action::JumpToTop
+                // Second 'g' press - complete the sequence
+                if let Some(action) = keymap.get_pending_g_action() {
+                    return action.clone();
+                }
             } else {
-                Action::PendingG
+                // First 'g' press - start pending sequence
+                return Action::PendingG;
             }
         }
-        (KeyCode::Char('G'), KeyModifiers::SHIFT) => Action::JumpToBottom,
+    }
 
-        // Selection / Image viewer
-        (KeyCode::Enter, KeyModifiers::NONE) => {
+    // Lookup action from keymap
+    if let Some(action) = keymap.get(&binding) {
+        // Apply context-specific overrides
+        return apply_context_overrides(action.clone(), app, &binding);
+    }
+
+    Action::None
+}
+
+/// Apply context-specific overrides to actions
+/// This handles cases where the same key does different things based on focus/state
+fn apply_context_overrides(action: Action, app: &App, binding: &KeyBinding) -> Action {
+    match action {
+        // NextArticle/PrevArticle only work in ArticleDetail
+        Action::NextArticle | Action::PrevArticle => {
+            if app.focus == Focus::ArticleDetail {
+                action
+            } else {
+                Action::None
+            }
+        }
+        // Select vs ViewImage based on focus
+        Action::Select => {
             if app.focus == Focus::ArticleDetail {
                 // In ArticleDetail, Enter opens fullscreen image viewer
                 Action::ViewImage
@@ -120,29 +118,40 @@ pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
                 Action::Select
             }
         }
-
-        // Article actions
-        (KeyCode::Char('b'), KeyModifiers::NONE)
-            if app.focus == Focus::ArticleDetail || app.focus == Focus::ArticleList =>
-        {
-            Action::OpenInBrowser
+        // ViewImage only in ArticleDetail
+        Action::ViewImage => {
+            if app.focus == Focus::ArticleDetail {
+                Action::ViewImage
+            } else {
+                Action::Select
+            }
         }
-        // Image navigation (ArticleDetail)
-        (KeyCode::Char('o'), KeyModifiers::NONE) if app.focus == Focus::ArticleDetail => {
-            Action::OpenImage
+        // OpenInBrowser only in ArticleList or ArticleDetail
+        Action::OpenInBrowser => {
+            if app.focus == Focus::ArticleDetail || app.focus == Focus::ArticleList {
+                Action::OpenInBrowser
+            } else {
+                Action::None
+            }
         }
-        (KeyCode::Tab, KeyModifiers::NONE) if app.focus == Focus::ArticleDetail => {
-            Action::NextImage
+        // OpenImage only in ArticleDetail
+        Action::OpenImage => {
+            if app.focus == Focus::ArticleDetail {
+                Action::OpenImage
+            } else {
+                Action::None
+            }
         }
-        (KeyCode::BackTab, KeyModifiers::SHIFT) if app.focus == Focus::ArticleDetail => {
-            Action::PrevImage
+        // NextImage/PrevImage only in ArticleDetail
+        Action::NextImage | Action::PrevImage => {
+            if app.focus == Focus::ArticleDetail {
+                action
+            } else {
+                Action::None
+            }
         }
-        (KeyCode::Char('s'), KeyModifiers::NONE) => Action::ToggleSaved,
-        (KeyCode::Char('r'), KeyModifiers::NONE) => Action::Refresh,
-
-        // 'd' key: Delete feed in Subscriptions, Toggle read in ArticleList/Detail
-        // Batch delete takes priority if feeds are selected
-        (KeyCode::Char('d'), KeyModifiers::NONE) => {
+        // ToggleRead becomes Delete in Subscriptions, or when feeds are selected
+        Action::ToggleRead => {
             if !app.selected_feeds.is_empty() {
                 Action::Delete
             } else {
@@ -152,37 +161,22 @@ pub fn handle_key_event(key: KeyEvent, app: &App) -> Action {
                 }
             }
         }
-
-        // Search
-        (KeyCode::Char('/'), KeyModifiers::NONE) => Action::StartSearchForward,
-        (KeyCode::Char('?'), KeyModifiers::SHIFT) => Action::StartSearchBackward,
-        (KeyCode::Char('n'), KeyModifiers::NONE) => Action::NextMatch,
-        (KeyCode::Char('N'), KeyModifiers::SHIFT) => Action::PrevMatch,
-
-        // View mode toggle
-        (KeyCode::Char('i'), KeyModifiers::NONE) => Action::ToggleUnreadOnly,
-
-        // History navigation
-        (KeyCode::Char('u'), KeyModifiers::NONE) => Action::HistoryBack,
-        (KeyCode::Char('r'), KeyModifiers::CONTROL) => Action::HistoryForward,
-
-        // Selection (yazi-like)
-        (KeyCode::Char(' '), KeyModifiers::NONE) => Action::ToggleSelect,
-        (KeyCode::Char('v'), KeyModifiers::NONE) => Action::VisualMode,
-
         // Escape: clear selection if any, otherwise exit mode
-        (KeyCode::Esc, KeyModifiers::NONE) => {
-            if app.is_visual_mode()
-                || !app.selected_articles.is_empty()
-                || !app.selected_feeds.is_empty()
-            {
-                Action::ClearSelection
+        Action::ExitMode => {
+            if binding.code == KeyCode::Esc && binding.modifiers == KeyModifiers::NONE {
+                if app.is_visual_mode()
+                    || !app.selected_articles.is_empty()
+                    || !app.selected_feeds.is_empty()
+                {
+                    Action::ClearSelection
+                } else {
+                    Action::ExitMode
+                }
             } else {
-                Action::ExitMode
+                action
             }
         }
-
-        _ => Action::None,
+        _ => action,
     }
 }
 
@@ -207,21 +201,43 @@ fn handle_confirm_mode(key: KeyEvent) -> Action {
 }
 
 /// Handle key events in fullscreen image viewer mode
-fn handle_image_viewer_mode(key: KeyEvent) -> Action {
+fn handle_image_viewer_mode(key: KeyEvent, keymap: &Keymap) -> Action {
+    let binding = KeyBinding::new(key.code, key.modifiers);
+
+    // Check for quit (always exits viewer)
+    if let Some(action) = keymap.get(&binding) {
+        if matches!(action, Action::Quit) {
+            return Action::ExitImageViewer;
+        }
+    }
+
+    // Escape always exits
+    if key.code == KeyCode::Esc && key.modifiers == KeyModifiers::NONE {
+        return Action::ExitImageViewer;
+    }
+
+    // Image navigation - check configured keys
+    if let Some(action) = keymap.get(&binding) {
+        match action {
+            Action::NextImage | Action::MoveDown | Action::FocusRight => {
+                return Action::NextImage;
+            }
+            Action::PrevImage | Action::MoveUp | Action::FocusLeft => {
+                return Action::PrevImage;
+            }
+            Action::OpenImage | Action::Select => {
+                return Action::OpenImage;
+            }
+            _ => {}
+        }
+    }
+
+    // Hardcoded fallbacks for image viewer navigation
     match (key.code, key.modifiers) {
-        // Exit image viewer
-        (KeyCode::Char('q'), KeyModifiers::NONE) => Action::ExitImageViewer,
-        (KeyCode::Esc, KeyModifiers::NONE) => Action::ExitImageViewer,
-        // Navigate images
-        (KeyCode::Char('n'), KeyModifiers::NONE) => Action::NextImage,
-        (KeyCode::Char('l'), KeyModifiers::NONE) => Action::NextImage,
+        // Additional navigation keys
         (KeyCode::Right, KeyModifiers::NONE) => Action::NextImage,
-        (KeyCode::Char(' '), KeyModifiers::NONE) => Action::NextImage,
-        (KeyCode::Char('p'), KeyModifiers::NONE) => Action::PrevImage,
-        (KeyCode::Char('h'), KeyModifiers::NONE) => Action::PrevImage,
         (KeyCode::Left, KeyModifiers::NONE) => Action::PrevImage,
-        // Open in external viewer
-        (KeyCode::Char('o'), KeyModifiers::NONE) => Action::OpenImage,
+        (KeyCode::Char(' '), KeyModifiers::NONE) => Action::NextImage,
         (KeyCode::Enter, KeyModifiers::NONE) => Action::OpenImage,
         _ => Action::None,
     }

@@ -112,6 +112,7 @@ kenseader daemon stop
 | 命令 | 描述 |
 |------|------|
 | `run` | 启动终端界面 |
+| `run --read-mode` | 以只读模式启动 TUI（直接访问数据库，无需守护进程） |
 | `subscribe` | 订阅 RSS 源 |
 | `unsubscribe` | 取消订阅 |
 | `import` | 从 OPML 文件导入订阅 |
@@ -204,6 +205,26 @@ Visual 模式技巧：
 |------|------|
 | `Esc` | 退出当前模式 |
 | `q` | 退出程序 |
+
+### 自定义快捷键
+
+所有快捷键都可以在 `config.toml` 中使用 Vim 风格表示法自定义：
+
+```toml
+[keymap]
+# 导航（Colemak 布局示例）
+move_down = "n"           # 原: j
+move_up = "e"             # 原: k
+focus_left = "m"          # 原: h
+focus_right = "i"         # 原: l
+next_article = "<C-n>"    # 原: <C-j>
+prev_article = "<C-e>"    # 原: <C-k>
+
+# 使用 <C-x> 表示 Ctrl+x，<S-x> 表示 Shift+x
+# 特殊键：<CR>, <Enter>, <Esc>, <Tab>, <Space>, <Left>, <Right>, <Up>, <Down>
+```
+
+完整的可配置快捷键列表请参见 `config/default.toml`。
 
 ## 配置
 
@@ -756,6 +777,33 @@ filter_interval_secs = 120
 | 图片缓存 (`image_cache/`) | 是 | 缓存的文章图片 |
 | Socket 文件 (`kenseader.sock`) | 否 | 仅用于本地 IPC |
 | PID 文件 (`daemon.pid`) | 否 | 本地进程跟踪 |
+
+### 多设备同步的只读模式
+
+使用云同步时，可以在**只读模式**下运行 TUI 来浏览文章，无需运行守护进程。适用场景：
+- 在一台设备（如台式机）上运行守护进程，在另一台设备（如笔记本）上阅读
+- 快速只读访问，无需启动守护进程
+- 使用云同步时，另一台设备负责更新订阅源
+
+```bash
+# 以只读模式启动 TUI（无需守护进程）
+kenseader run --read-mode
+```
+
+**只读模式功能：**
+- 直接从同步的数据库浏览文章
+- 可切换已读/未读状态（数据库锁定时自动重试写入）
+- 可收藏/书签文章
+- 状态栏和窗口标题显示 `[READ]` 指示器
+
+**只读模式限制：**
+- 无法刷新订阅源（由守护进程处理）
+- 无法添加/删除订阅
+- 数据库写入可能偶尔失败（如另一台设备正在写入时），会自动重试
+
+**典型工作流：**
+1. 在主设备上运行守护进程：`kenseader daemon start`
+2. 在其他设备上使用只读模式：`kenseader run --read-mode`
 
 ### 注意事项
 
