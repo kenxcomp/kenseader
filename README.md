@@ -113,6 +113,7 @@ kenseader daemon stop
 | Command | Description |
 |---------|-------------|
 | `run` | Start the TUI interface |
+| `run --read-mode` | Start TUI in read-mode (direct database access, no daemon required) |
 | `subscribe` | Subscribe to an RSS feed |
 | `unsubscribe` | Unsubscribe from a feed |
 | `import` | Import subscriptions from OPML file |
@@ -207,6 +208,26 @@ Links in article content are displayed with blue underlined text. When focused, 
 |-----|--------|
 | `Esc` | Exit current mode |
 | `q` | Quit application |
+
+### Customizing Keybindings
+
+All keybindings can be customized in `config.toml` using Vim-style notation:
+
+```toml
+[keymap]
+# Navigation (Colemak example)
+move_down = "n"           # was: j
+move_up = "e"             # was: k
+focus_left = "m"          # was: h
+focus_right = "i"         # was: l
+next_article = "<C-n>"    # was: <C-j>
+prev_article = "<C-e>"    # was: <C-k>
+
+# Use <C-x> for Ctrl+x, <S-x> for Shift+x
+# Special keys: <CR>, <Enter>, <Esc>, <Tab>, <Space>, <Left>, <Right>, <Up>, <Down>
+```
+
+See `config/default.toml` for the complete list of configurable keybindings.
 
 ## Configuration
 
@@ -769,6 +790,34 @@ To sync your RSS data across devices (e.g., Mac + future iOS app):
 | Image Cache (`image_cache/`) | Yes | Cached article images |
 | Socket File (`kenseader.sock`) | No | Local IPC only |
 | PID File (`daemon.pid`) | No | Local process tracking |
+
+### Read-Mode for Multi-Device Sync
+
+When using cloud sync, you can run the TUI in **read-mode** to browse articles without a running daemon. This is useful when:
+- You have the daemon running on one machine (e.g., desktop) but want to read on another (e.g., laptop)
+- You want quick read-only access without starting the daemon
+- You're using cloud sync and another device is handling feed updates
+
+```bash
+# Start TUI in read-mode (no daemon required)
+kenseader run --read-mode
+```
+
+**Read-mode features:**
+- Browses articles directly from the synced database
+- Can toggle read/unread status (writes to database with retry on lock)
+- Can save/bookmark articles
+- Shows `[READ]` indicator in status bar and window title
+
+**Read-mode limitations:**
+- Cannot refresh feeds (daemon handles this)
+- Cannot add/delete feed subscriptions
+- Database writes may occasionally fail if another device is writing (retries automatically)
+
+**Typical workflow:**
+1. Run daemon on your main machine: `kenseader daemon start`
+2. On other devices, just use read-mode: `kenseader run --read-mode`
+3. Cloud sync keeps the database in sync across all devices
 
 ### Notes
 

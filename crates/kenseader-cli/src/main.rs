@@ -27,7 +27,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Start the TUI
-    Run,
+    Run {
+        /// Read-mode: read directly from data_dir without daemon (for cloud sync users)
+        #[arg(long)]
+        read_mode: bool,
+    },
     /// Subscribe to an RSS feed
     Subscribe {
         /// RSS feed URL (supports rsshub:// protocol)
@@ -101,9 +105,12 @@ async fn main() -> Result<()> {
 
     // Handle commands
     match cli.command {
-        Some(Commands::Run) | None => {
-            // TUI uses daemon client, no direct database access
-            commands::run::run(config).await
+        Some(Commands::Run { read_mode }) => {
+            commands::run::run(config, read_mode).await
+        }
+        None => {
+            // Default: start TUI in normal mode
+            commands::run::run(config, false).await
         }
         Some(Commands::Subscribe { url, name }) => {
             commands::subscribe::run(&db, &config, &url, &name).await

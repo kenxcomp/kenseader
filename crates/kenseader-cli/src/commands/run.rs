@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, SetTitle},
 };
 use ratatui::{
     backend::CrosstermBackend,
@@ -18,12 +18,14 @@ use tokio::sync::mpsc;
 
 use kenseader_core::{
     ipc::DaemonClient,
+    storage::{Database, ArticleRepository, FeedRepository},
     AppConfig,
 };
 use kenseader_tui::{
     app::{App, Focus, Mode, RichArticleState, ViewMode},
     event::{AppEvent, EventHandler, ImageLoadResult, RefreshResult},
     input::{handle_key_event, Action},
+    keymap::Keymap,
     rich_content::{download_image, FocusableItem},
     widgets::{
         ArticleDetailWidget, ArticleListWidget, ImageViewerWidget, PopupWidget, StatusBarWidget,
@@ -31,28 +33,54 @@ use kenseader_tui::{
     },
 };
 
-pub async fn run(config: Arc<AppConfig>) -> Result<()> {
-    // Create daemon client and check if daemon is running
-    let client = Arc::new(DaemonClient::new(config.socket_path()));
+pub async fn run(config: Arc<AppConfig>, read_mode: bool) -> Result<()> {
+    // Create keymap from config
+    let keymap = Keymap::from_config(&config.keymap);
 
-    if !client.ping().await? {
-        return Err(anyhow!(
-            "Daemon is not running.\nPlease start the daemon first with:\n  kenseader daemon start"
-        ));
-    }
+    // Create daemon client (None in read-mode)
+    let client: Option<Arc<DaemonClient>> = if read_mode {
+        None
+    } else {
+        let client = Arc::new(DaemonClient::new(config.socket_path()));
+        if !client.ping().await? {
+            return Err(anyhow!(
+                "Daemon is not running.\nPlease start the daemon first with:\n  kenseader daemon start\n\nOr use --read-mode to read directly from data_dir without daemon."
+            ));
+        }
+        Some(client)
+    };
+
+    // Create database for read-mode (direct database access)
+    let db: Option<Arc<Database>> = if read_mode {
+        Some(Arc::new(Database::new(&config).await?))
+    } else {
+        None
+    };
 
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+
+    // Set terminal title (include Read Mode indicator)
+    let title = if read_mode {
+        "Kenseader (Read Mode)"
+    } else {
+        "Kenseader"
+    };
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, SetTitle(title))?;
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     // Create app state
-    let mut app = App::new(client.clone(), config.clone());
+    let mut app = if read_mode {
+        App::new_read_mode(config.clone())
+    } else {
+        App::new(client.clone().unwrap(), config.clone())
+    };
 
     // Load initial data
-    load_feeds(&mut app).await?;
+    load_feeds(&mut app, db.as_ref()).await?;
 
     // Create event handler
     let event_handler = EventHandler::new(config.ui.tick_rate_ms);
@@ -81,7 +109,7 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
 
         // Process any completed refresh operations (non-blocking)
         while let Ok(result) = refresh_rx.try_recv() {
-            handle_refresh_result(&mut app, result, &client, data_dir.as_ref()).await?;
+            handle_refresh_result(&mut app, result, db.as_ref(), data_dir.as_ref()).await?;
         }
 
         // Preload images for nearby articles (when in article list view)
@@ -158,8 +186,8 @@ pub async fn run(config: Arc<AppConfig>) -> Result<()> {
         if let Some(event) = event_handler.next()? {
             match event {
                 AppEvent::Key(key) => {
-                    let action = handle_key_event(key, &app);
-                    handle_action(&mut app, action, &client, data_dir.as_ref(), refresh_tx.clone()).await?;
+                    let action = handle_key_event(key, &app, &keymap);
+                    handle_action(&mut app, action, client.as_ref(), db.as_ref(), data_dir.as_ref(), refresh_tx.clone()).await?;
                 }
                 AppEvent::Resize(_, _) => {
                     // Recalculate heights on resize
@@ -229,15 +257,15 @@ fn handle_image_result(app: &mut App, result: ImageLoadResult) {
 async fn handle_refresh_result(
     app: &mut App,
     result: RefreshResult,
-    _client: &DaemonClient,
+    db: Option<&Arc<Database>>,
     data_dir: Option<&PathBuf>,
 ) -> Result<()> {
     app.is_refreshing = false;
 
     match result {
         RefreshResult::Success { new_count } => {
-            // Reload data from daemon
-            load_feeds(app).await?;
+            // Reload data
+            load_feeds(app, db).await?;
             init_rich_article_state(app, data_dir);
             if new_count > 0 {
                 app.set_status(format!("Refreshed: {} new articles", new_count));
@@ -397,13 +425,20 @@ fn spawn_preload_image(
     });
 }
 
-async fn load_feeds(app: &mut App) -> Result<()> {
-    app.feeds = app.client.list_feeds().await?;
+async fn load_feeds(app: &mut App, db: Option<&Arc<Database>>) -> Result<()> {
+    // Load feeds from database (read-mode) or daemon client
+    app.feeds = if app.read_mode {
+        let db = db.expect("Database required in read-mode");
+        FeedRepository::new(db).list_all().await?
+    } else {
+        let client = app.client.as_ref().expect("Client required in normal mode");
+        client.list_feeds().await?
+    };
 
     if !app.feeds.is_empty() {
         // Ensure selected feed is valid for current view mode
         ensure_valid_feed_selection(app);
-        load_articles(app).await?;
+        load_articles(app, db).await?;
     }
 
     Ok(())
@@ -429,17 +464,25 @@ fn ensure_valid_feed_selection(app: &mut App) {
     }
 }
 
-async fn load_articles(app: &mut App) -> Result<()> {
-    load_articles_preserve_selection(app, false).await
+async fn load_articles(app: &mut App, db: Option<&Arc<Database>>) -> Result<()> {
+    load_articles_preserve_selection(app, db, false).await
 }
 
-async fn load_articles_preserve_selection(app: &mut App, preserve: bool) -> Result<()> {
+async fn load_articles_preserve_selection(app: &mut App, db: Option<&Arc<Database>>, preserve: bool) -> Result<()> {
     if let Some(feed) = app.current_feed() {
         let feed_idx = app.selected_feed;
+        let feed_id = feed.id;
         let unread_only = matches!(app.view_mode, ViewMode::UnreadOnly);
         let prev_selected = app.selected_article;
 
-        app.articles = app.client.list_articles(Some(feed.id), unread_only).await?;
+        // Load articles from database (read-mode) or daemon client
+        app.articles = if app.read_mode {
+            let db = db.expect("Database required in read-mode");
+            ArticleRepository::new(db).list_by_feed(feed_id, unread_only).await?
+        } else {
+            let client = app.client.as_ref().expect("Client required in normal mode");
+            client.list_articles(Some(feed_id), unread_only).await?
+        };
 
         // Sync unread_count with actual article data
         let actual_unread_count = if unread_only {
@@ -470,7 +513,7 @@ async fn load_articles_preserve_selection(app: &mut App, preserve: bool) -> Resu
 }
 
 /// Load articles for history navigation - ignores unread-only filter to find the target article
-async fn load_articles_for_history(app: &mut App, target_article_id: Uuid) -> Result<bool> {
+async fn load_articles_for_history(app: &mut App, db: Option<&Arc<Database>>, target_article_id: Uuid) -> Result<bool> {
     let feed_id = match app.current_feed() {
         Some(feed) => feed.id,
         None => return Ok(false),
@@ -478,7 +521,15 @@ async fn load_articles_for_history(app: &mut App, target_article_id: Uuid) -> Re
 
     // First try to find in current filtered list
     let unread_only = matches!(app.view_mode, ViewMode::UnreadOnly);
-    app.articles = app.client.list_articles(Some(feed_id), unread_only).await?;
+
+    // Load articles from database (read-mode) or daemon client
+    app.articles = if app.read_mode {
+        let db = db.expect("Database required in read-mode");
+        ArticleRepository::new(db).list_by_feed(feed_id, unread_only).await?
+    } else {
+        let client = app.client.as_ref().expect("Client required in normal mode");
+        client.list_articles(Some(feed_id), unread_only).await?
+    };
 
     if let Some(idx) = app.find_article_index(target_article_id) {
         app.selected_article = idx;
@@ -489,7 +540,13 @@ async fn load_articles_for_history(app: &mut App, target_article_id: Uuid) -> Re
 
     // If in unread-only mode and article not found, load all articles
     if unread_only {
-        app.articles = app.client.list_articles(Some(feed_id), false).await?;
+        app.articles = if app.read_mode {
+            let db = db.expect("Database required in read-mode");
+            ArticleRepository::new(db).list_by_feed(feed_id, false).await?
+        } else {
+            let client = app.client.as_ref().expect("Client required in normal mode");
+            client.list_articles(Some(feed_id), false).await?
+        };
 
         if let Some(idx) = app.find_article_index(target_article_id) {
             app.selected_article = idx;
@@ -545,10 +602,45 @@ fn init_rich_article_state(app: &mut App, data_dir: Option<&PathBuf>) {
     }
 }
 
+/// Helper function to mark article as read (handles both read-mode and normal mode)
+async fn mark_article_read(
+    app: &App,
+    client: Option<&Arc<DaemonClient>>,
+    db: Option<&Arc<Database>>,
+    article_id: Uuid,
+) -> Result<()> {
+    if app.read_mode {
+        let db = db.expect("Database required in read-mode");
+        ArticleRepository::new(db).mark_read(article_id).await?;
+    } else {
+        let client = client.expect("Client required in normal mode");
+        client.mark_read(article_id).await?;
+    }
+    Ok(())
+}
+
+/// Helper function to mark article as unread (handles both read-mode and normal mode)
+async fn mark_article_unread(
+    app: &App,
+    client: Option<&Arc<DaemonClient>>,
+    db: Option<&Arc<Database>>,
+    article_id: Uuid,
+) -> Result<()> {
+    if app.read_mode {
+        let db = db.expect("Database required in read-mode");
+        ArticleRepository::new(db).mark_unread(article_id).await?;
+    } else {
+        let client = client.expect("Client required in normal mode");
+        client.mark_unread(article_id).await?;
+    }
+    Ok(())
+}
+
 async fn handle_action(
     app: &mut App,
     action: Action,
-    client: &DaemonClient,
+    client: Option<&Arc<DaemonClient>>,
+    db: Option<&Arc<Database>>,
     data_dir: Option<&PathBuf>,
     refresh_tx: mpsc::UnboundedSender<RefreshResult>,
 ) -> Result<()> {
@@ -572,7 +664,7 @@ async fn handle_action(
             {
                 // Ensure feed selection is valid (feed may be hidden if all articles read)
                 ensure_valid_feed_selection(app);
-                load_articles_preserve_selection(app, true).await?;
+                load_articles_preserve_selection(app, db, true).await?;
                 // Re-initialize rich state since the article at the current index may have changed
                 init_rich_article_state(app, data_dir);
             }
@@ -589,7 +681,8 @@ async fn handle_action(
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
                         let article_id = article.id;
-                        client.mark_read(article_id).await?;
+                        // Mark as read
+                        mark_article_read(app, client, db, article_id).await?;
                         // Update local state without reloading (keeps article visible in unread-only mode)
                         if let Some(article) = app.current_article_mut() {
                             article.is_read = true;
@@ -637,7 +730,7 @@ async fn handle_action(
             if app.focus == Focus::Subscriptions && prev_feed != app.selected_feed {
                 // Clear preload cache when switching feeds
                 app.preload_cache.clear();
-                load_articles(app).await?;
+                load_articles(app, db).await?;
                 // Initialize rich state for the first article in the new feed
                 init_rich_article_state(app, data_dir);
             }
@@ -655,7 +748,7 @@ async fn handle_action(
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
                         let article_id = article.id;
-                        client.mark_read(article_id).await?;
+                        mark_article_read(app, client, db, article_id).await?;
                         if let Some(article) = app.current_article_mut() {
                             article.is_read = true;
                         }
@@ -700,7 +793,7 @@ async fn handle_action(
             if app.focus == Focus::Subscriptions && prev_feed != app.selected_feed {
                 // Clear preload cache when switching feeds
                 app.preload_cache.clear();
-                load_articles(app).await?;
+                load_articles(app, db).await?;
                 // Initialize rich state for the first article in the new feed
                 init_rich_article_state(app, data_dir);
             }
@@ -718,7 +811,7 @@ async fn handle_action(
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
                         let article_id = article.id;
-                        client.mark_read(article_id).await?;
+                        mark_article_read(app, client, db, article_id).await?;
                         if let Some(article) = app.current_article_mut() {
                             article.is_read = true;
                         }
@@ -759,7 +852,7 @@ async fn handle_action(
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
                         let article_id = article.id;
-                        client.mark_read(article_id).await?;
+                        mark_article_read(app, client, db, article_id).await?;
                         if let Some(article) = app.current_article_mut() {
                             article.is_read = true;
                         }
@@ -801,7 +894,7 @@ async fn handle_action(
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
                         let article_id = article.id;
-                        client.mark_read(article_id).await?;
+                        mark_article_read(app, client, db, article_id).await?;
                         if let Some(article) = app.current_article_mut() {
                             article.is_read = true;
                         }
@@ -888,7 +981,7 @@ async fn handle_action(
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
                         let article_id = article.id;
-                        client.mark_read(article_id).await?;
+                        mark_article_read(app, client, db, article_id).await?;
                         if let Some(article) = app.current_article_mut() {
                             article.is_read = true;
                         }
@@ -923,7 +1016,7 @@ async fn handle_action(
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
                         let article_id = article.id;
-                        client.mark_read(article_id).await?;
+                        mark_article_read(app, client, db, article_id).await?;
                         if let Some(article) = app.current_article_mut() {
                             article.is_read = true;
                         }
@@ -946,7 +1039,7 @@ async fn handle_action(
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
                         let article_id = article.id;
-                        client.mark_read(article_id).await?;
+                        mark_article_read(app, client, db, article_id).await?;
                         // Update local state without reloading (keeps article visible in unread-only mode)
                         if let Some(article) = app.current_article_mut() {
                             article.is_read = true;
@@ -996,20 +1089,33 @@ async fn handle_action(
         }
         Action::ToggleSaved => {
             if let Some(article) = app.current_article() {
-                let saved = client.toggle_saved(article.id).await?;
+                let article_id = article.id;
+                // Toggle saved in database (read-mode) or via daemon
+                let saved = if app.read_mode {
+                    let db = db.expect("Database required in read-mode");
+                    ArticleRepository::new(db).toggle_saved(article_id).await?
+                } else {
+                    let client = client.expect("Client required in normal mode");
+                    client.toggle_saved(article_id).await?
+                };
                 app.set_status(if saved { "Article saved" } else { "Article unsaved" });
-                load_articles_preserve_selection(app, true).await?;
+                load_articles_preserve_selection(app, db, true).await?;
                 init_rich_article_state(app, data_dir);
             }
         }
         Action::Delete => {
-            // Batch delete takes priority if feeds are selected (regardless of current focus)
-            if !app.selected_feeds.is_empty() {
-                app.mode = Mode::BatchDeleteConfirm;
-            } else if app.focus == Focus::Subscriptions {
-                if let Some(feed) = app.current_feed() {
-                    // Single delete
-                    app.mode = Mode::DeleteConfirm(feed.id);
+            // Delete is disabled in read-mode (for feeds)
+            if app.read_mode {
+                app.set_status("Feed delete disabled in read-mode");
+            } else {
+                // Batch delete takes priority if feeds are selected (regardless of current focus)
+                if !app.selected_feeds.is_empty() {
+                    app.mode = Mode::BatchDeleteConfirm;
+                } else if app.focus == Focus::Subscriptions {
+                    if let Some(feed) = app.current_feed() {
+                        // Single delete
+                        app.mode = Mode::DeleteConfirm(feed.id);
+                    }
                 }
             }
         }
@@ -1017,41 +1123,56 @@ async fn handle_action(
             match &app.mode {
                 Mode::DeleteConfirm(feed_id) => {
                     let feed_id = *feed_id;
-                    client.delete_feed(feed_id).await?;
-                    app.mode = Mode::Normal;
-                    load_feeds(app).await?;
-                    init_rich_article_state(app, data_dir);
-                    app.set_status("Feed deleted");
+                    // Delete is disabled in read-mode
+                    if app.read_mode {
+                        app.set_status("Feed delete disabled in read-mode");
+                        app.mode = Mode::Normal;
+                    } else {
+                        let client = client.expect("Client required for delete");
+                        client.delete_feed(feed_id).await?;
+                        app.mode = Mode::Normal;
+                        load_feeds(app, db).await?;
+                        init_rich_article_state(app, data_dir);
+                        app.set_status("Feed deleted");
+                    }
                 }
                 Mode::BatchDeleteConfirm => {
-                    // Batch delete selected feeds
-                    let indices: Vec<usize> = app.selected_feeds.iter().cloned().collect();
-                    let mut deleted_count = 0;
-                    let mut errors = Vec::new();
+                    // Batch delete is disabled in read-mode
+                    if app.read_mode {
+                        app.set_status("Feed delete disabled in read-mode");
+                        app.mode = Mode::Normal;
+                        app.selected_feeds.clear();
+                    } else {
+                        // Batch delete selected feeds
+                        let indices: Vec<usize> = app.selected_feeds.iter().cloned().collect();
+                        let mut deleted_count = 0;
+                        let mut errors = Vec::new();
+                        let client = client.expect("Client required for delete");
 
-                    for &idx in &indices {
-                        if let Some(feed) = app.feeds.get(idx) {
-                            let feed_id = feed.id;
-                            match client.delete_feed(feed_id).await {
-                                Ok(_) => {
-                                    deleted_count += 1;
-                                }
-                                Err(e) => {
-                                    errors.push(format!("{}", e));
+                        for &idx in &indices {
+                            if let Some(feed) = app.feeds.get(idx) {
+                                let feed_id = feed.id;
+                                match client.delete_feed(feed_id).await {
+                                    Ok(_) => {
+                                        deleted_count += 1;
+                                    }
+                                    Err(e) => {
+                                        errors.push(format!("{}", e));
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    app.mode = Mode::Normal;
-                    app.clear_feed_selection();
-                    load_feeds(app).await?;
-                    init_rich_article_state(app, data_dir);
+                        app.mode = Mode::Normal;
+                        app.clear_feed_selection();
+                        load_feeds(app, db).await?;
+                        init_rich_article_state(app, data_dir);
 
-                    if errors.is_empty() {
-                        app.set_status(format!("Deleted {} feeds", deleted_count));
-                    } else {
-                        app.set_status(format!("Deleted {} feeds, {} errors", deleted_count, errors.len()));
+                        if errors.is_empty() {
+                            app.set_status(format!("Deleted {} feeds", deleted_count));
+                        } else {
+                            app.set_status(format!("Deleted {} feeds, {} errors", deleted_count, errors.len()));
+                        }
                     }
                 }
                 Mode::SearchForward(_) | Mode::SearchBackward(_) => {
@@ -1080,13 +1201,13 @@ async fn handle_action(
             app.toggle_view_mode();
             // Ensure selected feed is valid for new view mode
             ensure_valid_feed_selection(app);
-            load_articles(app).await?;
+            load_articles(app, db).await?;
             init_rich_article_state(app, data_dir);
         }
         Action::ExitMode => {
             app.mode = Mode::Normal;
             app.view_mode = ViewMode::All;
-            load_articles(app).await?;
+            load_articles(app, db).await?;
             init_rich_article_state(app, data_dir);
         }
         Action::StartSearchForward => {
@@ -1108,15 +1229,18 @@ async fn handle_action(
             app.execute_search();
         }
         Action::Refresh => {
-            // Don't start another refresh if one is already in progress
-            if app.is_refreshing {
+            // Refresh is disabled in read-mode
+            if app.read_mode {
+                app.set_status("Refresh disabled in read-mode");
+            } else if app.is_refreshing {
+                // Don't start another refresh if one is already in progress
                 app.set_status("Refresh already in progress...");
             } else {
                 app.is_refreshing = true;
                 app.set_status("Refreshing feeds...");
 
                 // Clone what we need for the spawned task
-                let client = app.client.clone();
+                let client = app.client.clone().expect("Client required for refresh");
                 let tx = refresh_tx.clone();
 
                 // Spawn refresh as background task
@@ -1168,9 +1292,9 @@ async fn handle_action(
                         let was_read = article.is_read;
 
                         let result = if was_read {
-                            client.mark_unread(article_id).await
+                            mark_article_unread(app, client, db, article_id).await
                         } else {
-                            client.mark_read(article_id).await
+                            mark_article_read(app, client, db, article_id).await
                         };
 
                         match result {
@@ -1209,9 +1333,9 @@ async fn handle_action(
                     let was_read = article.is_read;
 
                     let result = if was_read {
-                        client.mark_unread(article_id).await
+                        mark_article_unread(app, client, db, article_id).await
                     } else {
-                        client.mark_read(article_id).await
+                        mark_article_read(app, client, db, article_id).await
                     };
 
                     match result {
@@ -1254,7 +1378,7 @@ async fn handle_action(
                         app.selected_feed = feed_idx;
                     }
                     // Load articles and find the target article (ignores unread-only if needed)
-                    if load_articles_for_history(app, article_id).await? {
+                    if load_articles_for_history(app, db, article_id).await? {
                         init_rich_article_state(app, data_dir);
                         app.set_status("← Back");
                     } else {
@@ -1275,7 +1399,7 @@ async fn handle_action(
                         app.selected_feed = feed_idx;
                     }
                     // Load articles and find the target article (ignores unread-only if needed)
-                    if load_articles_for_history(app, article_id).await? {
+                    if load_articles_for_history(app, db, article_id).await? {
                         init_rich_article_state(app, data_dir);
                         app.set_status("→ Forward");
                     } else {
@@ -1312,7 +1436,7 @@ async fn handle_action(
                             let next_visible = visible_idx + 1;
                             if let Some(actual_idx) = app.visible_to_actual_feed_index(next_visible) {
                                 app.selected_feed = actual_idx;
-                                load_articles(app).await?;
+                                load_articles(app, db).await?;
                                 init_rich_article_state(app, data_dir);
                             }
                         }

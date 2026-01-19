@@ -210,8 +210,8 @@ pub enum Mode {
 
 /// Application state
 pub struct App {
-    /// Daemon client for IPC communication
-    pub client: Arc<DaemonClient>,
+    /// Daemon client for IPC communication (None in read-mode)
+    pub client: Option<Arc<DaemonClient>>,
     /// Application configuration
     pub config: Arc<AppConfig>,
     /// List of feeds
@@ -267,13 +267,27 @@ pub struct App {
     pub spinner_frame: usize,
     /// Global preload cache for prefetching images before entering article detail
     pub preload_cache: PreloadCache,
+    /// Read-mode: TUI reads directly from data_dir without daemon
+    /// Disables refresh, feed add/delete; allows read status toggle with retry
+    pub read_mode: bool,
 }
 
 /// Spinner animation frames (braille pattern)
 pub const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 impl App {
+    /// Create a new App with daemon client (normal mode)
     pub fn new(client: Arc<DaemonClient>, config: Arc<AppConfig>) -> Self {
+        Self::new_with_mode(Some(client), config, false)
+    }
+
+    /// Create a new App in read-mode (direct database access, no daemon)
+    pub fn new_read_mode(config: Arc<AppConfig>) -> Self {
+        Self::new_with_mode(None, config, true)
+    }
+
+    /// Internal constructor with mode selection
+    fn new_with_mode(client: Option<Arc<DaemonClient>>, config: Arc<AppConfig>, read_mode: bool) -> Self {
         Self {
             client,
             config,
@@ -303,6 +317,7 @@ impl App {
             viewport_height: 24, // Default, will be updated on first render
             spinner_frame: 0,
             preload_cache: PreloadCache::new(None), // Initialized without disk cache, will be set later
+            read_mode,
         }
     }
 

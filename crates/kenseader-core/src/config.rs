@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub sync: SyncConfig,
     #[serde(default)]
     pub rsshub: RsshubConfig,
+    #[serde(default)]
+    pub keymap: KeymapConfig,
 }
 
 impl Default for AppConfig {
@@ -23,6 +25,7 @@ impl Default for AppConfig {
             ui: UiConfig::default(),
             sync: SyncConfig::default(),
             rsshub: RsshubConfig::default(),
+            keymap: KeymapConfig::default(),
         }
     }
 }
@@ -205,6 +208,199 @@ impl Default for RsshubConfig {
         }
     }
 }
+
+/// Keymap configuration using Vim-style notation
+/// Format: "j", "k", "<C-j>" (Ctrl+j), "<S-g>" (Shift+g), "<CR>" (Enter), "<Esc>", "<Tab>", "<Space>"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeymapConfig {
+    // Application control
+    /// Quit the application
+    #[serde(default = "default_key_quit")]
+    pub quit: String,
+
+    // Navigation between panels
+    /// Focus left panel
+    #[serde(default = "default_key_focus_left")]
+    pub focus_left: String,
+    /// Focus right panel
+    #[serde(default = "default_key_focus_right")]
+    pub focus_right: String,
+
+    // Navigation within panel
+    /// Move cursor down
+    #[serde(default = "default_key_move_down")]
+    pub move_down: String,
+    /// Move cursor up
+    #[serde(default = "default_key_move_up")]
+    pub move_up: String,
+
+    // Scrolling
+    /// Scroll half page down
+    #[serde(default = "default_key_scroll_half_down")]
+    pub scroll_half_down: String,
+    /// Scroll half page up
+    #[serde(default = "default_key_scroll_half_up")]
+    pub scroll_half_up: String,
+    /// Scroll full page down
+    #[serde(default = "default_key_scroll_page_down")]
+    pub scroll_page_down: String,
+    /// Scroll full page up
+    #[serde(default = "default_key_scroll_page_up")]
+    pub scroll_page_up: String,
+
+    // Article navigation (ArticleDetail only)
+    /// Switch to next article (respects UnreadOnly mode)
+    #[serde(default = "default_key_next_article")]
+    pub next_article: String,
+    /// Switch to previous article (respects UnreadOnly mode)
+    #[serde(default = "default_key_prev_article")]
+    pub prev_article: String,
+
+    // Jump to top/bottom
+    /// Jump to top (first item)
+    #[serde(default = "default_key_jump_to_top")]
+    pub jump_to_top: String,
+    /// Jump to bottom (last item)
+    #[serde(default = "default_key_jump_to_bottom")]
+    pub jump_to_bottom: String,
+
+    // Actions
+    /// Select item / Enter article detail
+    #[serde(default = "default_key_select")]
+    pub select: String,
+    /// Open article in browser
+    #[serde(default = "default_key_open_browser")]
+    pub open_browser: String,
+    /// Toggle article saved status
+    #[serde(default = "default_key_toggle_saved")]
+    pub toggle_saved: String,
+    /// Refresh feeds
+    #[serde(default = "default_key_refresh")]
+    pub refresh: String,
+    /// Toggle article read/unread status (or delete feed in Subscriptions)
+    #[serde(default = "default_key_toggle_read")]
+    pub toggle_read: String,
+
+    // Search
+    /// Start forward search
+    #[serde(default = "default_key_search_forward")]
+    pub search_forward: String,
+    /// Start backward search
+    #[serde(default = "default_key_search_backward")]
+    pub search_backward: String,
+    /// Go to next search match
+    #[serde(default = "default_key_next_match")]
+    pub next_match: String,
+    /// Go to previous search match
+    #[serde(default = "default_key_prev_match")]
+    pub prev_match: String,
+
+    // View mode
+    /// Toggle between All and Unread-only view
+    #[serde(default = "default_key_toggle_unread_only")]
+    pub toggle_unread_only: String,
+
+    // History
+    /// Navigate back in history
+    #[serde(default = "default_key_history_back")]
+    pub history_back: String,
+    /// Navigate forward in history
+    #[serde(default = "default_key_history_forward")]
+    pub history_forward: String,
+
+    // Selection
+    /// Toggle selection and move to next
+    #[serde(default = "default_key_toggle_select")]
+    pub toggle_select: String,
+    /// Enter/exit visual selection mode
+    #[serde(default = "default_key_visual_mode")]
+    pub visual_mode: String,
+
+    // Image viewing
+    /// Open focused item in external viewer (image) or browser (link)
+    #[serde(default = "default_key_open_item")]
+    pub open_item: String,
+    /// Enter fullscreen image viewer
+    #[serde(default = "default_key_view_image")]
+    pub view_image: String,
+    /// Focus next item (image or link)
+    #[serde(default = "default_key_next_item")]
+    pub next_item: String,
+    /// Focus previous item (image or link)
+    #[serde(default = "default_key_prev_item")]
+    pub prev_item: String,
+}
+
+impl Default for KeymapConfig {
+    fn default() -> Self {
+        Self {
+            quit: default_key_quit(),
+            focus_left: default_key_focus_left(),
+            focus_right: default_key_focus_right(),
+            move_down: default_key_move_down(),
+            move_up: default_key_move_up(),
+            scroll_half_down: default_key_scroll_half_down(),
+            scroll_half_up: default_key_scroll_half_up(),
+            scroll_page_down: default_key_scroll_page_down(),
+            scroll_page_up: default_key_scroll_page_up(),
+            next_article: default_key_next_article(),
+            prev_article: default_key_prev_article(),
+            jump_to_top: default_key_jump_to_top(),
+            jump_to_bottom: default_key_jump_to_bottom(),
+            select: default_key_select(),
+            open_browser: default_key_open_browser(),
+            toggle_saved: default_key_toggle_saved(),
+            refresh: default_key_refresh(),
+            toggle_read: default_key_toggle_read(),
+            search_forward: default_key_search_forward(),
+            search_backward: default_key_search_backward(),
+            next_match: default_key_next_match(),
+            prev_match: default_key_prev_match(),
+            toggle_unread_only: default_key_toggle_unread_only(),
+            history_back: default_key_history_back(),
+            history_forward: default_key_history_forward(),
+            toggle_select: default_key_toggle_select(),
+            visual_mode: default_key_visual_mode(),
+            open_item: default_key_open_item(),
+            view_image: default_key_view_image(),
+            next_item: default_key_next_item(),
+            prev_item: default_key_prev_item(),
+        }
+    }
+}
+
+// Default keymap values (Vim-style notation)
+fn default_key_quit() -> String { "q".to_string() }
+fn default_key_focus_left() -> String { "h".to_string() }
+fn default_key_focus_right() -> String { "l".to_string() }
+fn default_key_move_down() -> String { "j".to_string() }
+fn default_key_move_up() -> String { "k".to_string() }
+fn default_key_scroll_half_down() -> String { "<C-d>".to_string() }
+fn default_key_scroll_half_up() -> String { "<C-u>".to_string() }
+fn default_key_scroll_page_down() -> String { "<C-f>".to_string() }
+fn default_key_scroll_page_up() -> String { "<C-b>".to_string() }
+fn default_key_next_article() -> String { "<C-j>".to_string() }
+fn default_key_prev_article() -> String { "<C-k>".to_string() }
+fn default_key_jump_to_top() -> String { "gg".to_string() }
+fn default_key_jump_to_bottom() -> String { "G".to_string() }
+fn default_key_select() -> String { "<CR>".to_string() }
+fn default_key_open_browser() -> String { "b".to_string() }
+fn default_key_toggle_saved() -> String { "s".to_string() }
+fn default_key_refresh() -> String { "r".to_string() }
+fn default_key_toggle_read() -> String { "d".to_string() }
+fn default_key_search_forward() -> String { "/".to_string() }
+fn default_key_search_backward() -> String { "?".to_string() }
+fn default_key_next_match() -> String { "n".to_string() }
+fn default_key_prev_match() -> String { "N".to_string() }
+fn default_key_toggle_unread_only() -> String { "i".to_string() }
+fn default_key_history_back() -> String { "u".to_string() }
+fn default_key_history_forward() -> String { "<C-r>".to_string() }
+fn default_key_toggle_select() -> String { "<Space>".to_string() }
+fn default_key_visual_mode() -> String { "v".to_string() }
+fn default_key_open_item() -> String { "o".to_string() }
+fn default_key_view_image() -> String { "<CR>".to_string() }
+fn default_key_next_item() -> String { "<Tab>".to_string() }
+fn default_key_prev_item() -> String { "<S-Tab>".to_string() }
 
 fn default_data_dir() -> PathBuf {
     dirs::data_local_dir()
