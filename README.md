@@ -34,6 +34,25 @@ A high-performance terminal RSS reader with AI-powered summarization and rich co
 
 ## Installation
 
+### Homebrew (macOS/Linux)
+
+```bash
+# Add the tap
+brew tap kenxcomp/tap
+
+# Install kenseader
+brew install kenseader
+
+# Start the daemon as a background service (recommended)
+brew services start kenseader
+
+# Or start manually
+kenseader daemon start
+
+# Run the TUI
+kenseader run
+```
+
 ### From Source
 
 ```bash

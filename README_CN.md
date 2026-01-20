@@ -34,6 +34,25 @@
 
 ## 安装
 
+### Homebrew（macOS/Linux）
+
+```bash
+# 添加 tap
+brew tap kenxcomp/tap
+
+# 安装 kenseader
+brew install kenseader
+
+# 将守护进程作为后台服务启动（推荐）
+brew services start kenseader
+
+# 或手动启动
+kenseader daemon start
+
+# 运行终端界面
+kenseader run
+```
+
 ### 从源码编译
 
 ```bash
