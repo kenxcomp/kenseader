@@ -13,18 +13,18 @@ class Kenseader < Formula
   on_macos do
     on_arm do
       url "https://github.com/kenxcomp/kenseader/releases/download/v#{version}/kenseader-macos-arm64.tar.gz"
-      sha256 "PLACEHOLDER_ARM64_SHA256"
+      sha256 "1ca2c48257cb4f386432beb7bc02633702bb7bce4c06fa0a37b1197efcbf83aa"
     end
     on_intel do
       url "https://github.com/kenxcomp/kenseader/releases/download/v#{version}/kenseader-macos-x86_64.tar.gz"
-      sha256 "PLACEHOLDER_X86_64_SHA256"
+      sha256 "4b50052f08fc0283420566113653df3fad38c42136c49cd65fa4e5b030a8788b"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/kenxcomp/kenseader/releases/download/v#{version}/kenseader-linux-x86_64.tar.gz"
-      sha256 "PLACEHOLDER_LINUX_X86_64_SHA256"
+      sha256 "aba564e85ea087b79a4fcd3d2b180ae5d5765cf7085c979e26dc1e04ee7e11ca"
     end
   end
 

@@ -82,11 +82,45 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Update Homebrew formula
-        uses: mislav/bump-homebrew-formula-action@v3
-        with:
-          formula-name: kenseader
-          homebrew-tap: kenxcomp/homebrew-tap
-          download-url: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/kenseader-macos-arm64.tar.gz
+      - name: Download release artifacts and calculate checksums
+        id: checksums
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+
+          # Download all artifacts
+          curl -sL -o arm64.tar.gz "${BASE_URL}/kenseader-macos-arm64.tar.gz"
+          curl -sL -o x86_64.tar.gz "${BASE_URL}/kenseader-macos-x86_64.tar.gz"
+          curl -sL -o linux.tar.gz "${BASE_URL}/kenseader-linux-x86_64.tar.gz"
+
+          # Calculate SHA256 checksums
+          SHA_ARM64=$(shasum -a 256 arm64.tar.gz | cut -d' ' -f1)
+          SHA_X86_64=$(shasum -a 256 x86_64.tar.gz | cut -d' ' -f1)
+          SHA_LINUX=$(shasum -a 256 linux.tar.gz | cut -d' ' -f1)
+
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "sha_arm64=${SHA_ARM64}" >> $GITHUB_OUTPUT
+          echo "sha_x86_64=${SHA_X86_64}" >> $GITHUB_OUTPUT
+          echo "sha_linux=${SHA_LINUX}" >> $GITHUB_OUTPUT
+
+      - name: Update Homebrew tap
         env:
-          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/kenxcomp/homebrew-tap.git"
+          cd homebrew-tap
+
+          # Update version
+          sed -i 's/version ".*"/version "${{ steps.checksums.outputs.version }}"/' Formula/kenseader.rb
+
+          # Update checksums - match the pattern with url line above it
+          sed -i '/kenseader-macos-arm64\.tar\.gz/,/sha256/{s/sha256 ".*"/sha256 "${{ steps.checksums.outputs.sha_arm64 }}"/}' Formula/kenseader.rb
+          sed -i '/kenseader-macos-x86_64\.tar\.gz/,/sha256/{s/sha256 ".*"/sha256 "${{ steps.checksums.outputs.sha_x86_64 }}"/}' Formula/kenseader.rb
+          sed -i '/kenseader-linux-x86_64\.tar\.gz/,/sha256/{s/sha256 ".*"/sha256 "${{ steps.checksums.outputs.sha_linux }}"/}' Formula/kenseader.rb
+
+          # Commit and push
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/kenseader.rb
+          git commit -m "Update kenseader to ${{ steps.checksums.outputs.version }}"
+          git push
