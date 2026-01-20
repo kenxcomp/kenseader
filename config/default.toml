@@ -95,10 +95,15 @@ image_preview = true
 #   Rose Pine: rose-pine, rose-pine-moon, rose-pine-dawn
 #   Monokai: monokai
 #   Zenburn: zenburn
+#
+# Simple format (just theme name):
 theme = "gruvbox-dark"
-
-# Optional: Override specific theme colors (use hex format)
-# [ui.theme_colors]
+#
+# To override specific colors, use the nested format instead:
+# [ui.theme]
+# name = "catppuccin-mocha"
+#
+# [ui.theme.colors]
 # bg0 = "#1d2021"
 # fg0 = "#ebdbb2"
 # accent = "#8ec07c"
