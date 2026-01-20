@@ -100,6 +100,12 @@ image_preview = true
 theme = "gruvbox-dark"
 #
 # To override specific colors, use the nested format instead:
+#   1. Comment out the simple "theme = ..." line above
+#   2. Use [ui.theme] section with "name" field
+#   3. Add [ui.theme.colors] section (NOTE: use dot "." not underscore "_")
+#   4. All color values MUST have "#" prefix (e.g., "#ff0000" not "ff0000")
+#
+# Example:
 # [ui.theme]
 # name = "catppuccin-mocha"
 #
