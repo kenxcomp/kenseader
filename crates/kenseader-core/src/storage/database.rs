@@ -28,6 +28,12 @@ impl Database {
             .connect(&db_url)
             .await?;
 
+        // Configure SQLite PRAGMA for better concurrency with cloud sync scenarios
+        // This ensures busy_timeout is set at the connection level as a fallback
+        sqlx::query("PRAGMA busy_timeout = 5000")
+            .execute(&pool)
+            .await?;
+
         let db = Self { pool };
         db.run_migrations().await?;
 
