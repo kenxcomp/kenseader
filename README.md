@@ -26,20 +26,11 @@ A high-performance terminal RSS reader with AI-powered summarization and rich co
 
 ## Screenshots
 
-```
-┌─ Subscriptions ─┬─ Articles ──────────────────┬─ Article ─────────────────────┐
-│ > Hacker News   │ ● Building a Rust CLI       │ Building a Rust CLI           │
-│   Rust Blog     │   New features in 1.75      │                               │
-│   GitHub Trend  │ ● Understanding async/await │ By John Doe | 2024-01-15      │
-│                 │   Memory safety explained   │                               │
-│                 │                             │ [Image displayed here]        │
-│                 │                             │                               │
-│                 │                             │ This article explains how to  │
-│                 │                             │ build command-line tools...   │
-├─────────────────┴─────────────────────────────┴───────────────────────────────┤
-│ All | Subscriptions | 4 articles | q:quit h/l:panels j/k:move /:search        │
-└───────────────────────────────────────────────────────────────────────────────┘
-```
+### Normal Mode
+![Normal Mode](src/normal%20mode.png)
+
+### Unread-Only Mode
+![Unread-Only Mode](src/unread-only%20mode.png)
 
 ## Installation
 
