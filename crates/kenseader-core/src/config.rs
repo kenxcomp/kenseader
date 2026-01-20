@@ -134,6 +134,9 @@ pub struct UiConfig {
     /// Image preview enabled
     #[serde(default = "default_true")]
     pub image_preview: bool,
+    /// Theme configuration
+    #[serde(default)]
+    pub theme: ThemeConfig,
 }
 
 impl Default for UiConfig {
@@ -143,8 +146,127 @@ impl Default for UiConfig {
             show_author: default_true(),
             show_timestamps: default_true(),
             image_preview: default_true(),
+            theme: ThemeConfig::default(),
         }
     }
+}
+
+/// Theme configuration
+/// Can be specified as a simple string (theme name) or as a full struct with overrides
+#[derive(Debug, Clone, Serialize)]
+pub struct ThemeConfig {
+    /// Theme name (e.g., "gruvbox-dark", "catppuccin-mocha")
+    pub name: String,
+    /// Optional color overrides for semantic colors
+    pub colors: ThemeColorOverrides,
+}
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self {
+            name: default_theme_name(),
+            colors: ThemeColorOverrides::default(),
+        }
+    }
+}
+
+// Custom deserializer to accept either a string or a struct
+impl<'de> Deserialize<'de> for ThemeConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+        use std::fmt;
+
+        struct ThemeConfigVisitor;
+
+        impl<'de> Visitor<'de> for ThemeConfigVisitor {
+            type Value = ThemeConfig;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a string (theme name) or a map with 'name' and optional 'colors'")
+            }
+
+            // Accept a simple string as just the theme name
+            fn visit_str<E>(self, value: &str) -> Result<ThemeConfig, E>
+            where
+                E: de::Error,
+            {
+                Ok(ThemeConfig {
+                    name: value.to_string(),
+                    colors: ThemeColorOverrides::default(),
+                })
+            }
+
+            // Accept a map/struct with 'name' and optional 'colors'
+            fn visit_map<M>(self, mut map: M) -> Result<ThemeConfig, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let mut name: Option<String> = None;
+                let mut colors: Option<ThemeColorOverrides> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "name" => {
+                            name = Some(map.next_value()?);
+                        }
+                        "colors" => {
+                            colors = Some(map.next_value()?);
+                        }
+                        _ => {
+                            // Ignore unknown fields
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+
+                Ok(ThemeConfig {
+                    name: name.unwrap_or_else(default_theme_name),
+                    colors: colors.unwrap_or_default(),
+                })
+            }
+        }
+
+        deserializer.deserialize_any(ThemeConfigVisitor)
+    }
+}
+
+fn default_theme_name() -> String {
+    "gruvbox-dark".to_string()
+}
+
+/// Optional color overrides for theme customization
+/// Each color is a hex string (e.g., "#ff0000" or "ff0000")
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ThemeColorOverrides {
+    /// Primary background
+    pub bg0: Option<String>,
+    /// Secondary background (slightly lighter)
+    pub bg1: Option<String>,
+    /// Tertiary background (selection, highlights)
+    pub bg2: Option<String>,
+    /// Primary foreground
+    pub fg0: Option<String>,
+    /// Secondary foreground (slightly dimmer)
+    pub fg1: Option<String>,
+    /// Accent color
+    pub accent: Option<String>,
+    /// Selection background
+    pub selection: Option<String>,
+    /// Unread indicator color
+    pub unread: Option<String>,
+    /// Read indicator color
+    pub read: Option<String>,
+    /// Error color
+    pub error: Option<String>,
+    /// Success color
+    pub success: Option<String>,
+    /// Warning color
+    pub warning: Option<String>,
+    /// Info color
+    pub info: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

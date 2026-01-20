@@ -9,33 +9,34 @@ use ratatui::{
 
 use crate::app::App;
 use crate::image_renderer::RenderBackend;
-use crate::theme::GruvboxMaterial;
+use crate::theme::Theme;
 
 pub struct ImageViewerWidget;
 
 impl ImageViewerWidget {
     /// Render fullscreen image viewer
     pub fn render(frame: &mut Frame, area: Rect, app: &mut App, image_index: usize) {
+        let theme = &app.theme;
         // Dark background
         let block = Block::default()
-            .style(Style::default().bg(GruvboxMaterial::BG0))
+            .style(Style::default().bg(theme.bg0))
             .borders(Borders::NONE);
         frame.render_widget(block, area);
 
         let Some(ref mut rich_state) = app.rich_state else {
-            Self::render_no_image(frame, area, "No article loaded");
+            Self::render_no_image(frame, area, "No article loaded", theme);
             return;
         };
 
         let image_count = rich_state.content.image_urls.len();
         if image_count == 0 {
-            Self::render_no_image(frame, area, "No images in this article");
+            Self::render_no_image(frame, area, "No images in this article", theme);
             return;
         }
 
         let actual_index = image_index.min(image_count - 1);
         let Some(url) = rich_state.content.image_urls.get(actual_index) else {
-            Self::render_no_image(frame, area, "Image not found");
+            Self::render_no_image(frame, area, "Image not found", theme);
             return;
         };
         let url = url.clone();
@@ -109,50 +110,50 @@ impl ImageViewerWidget {
                 }
             }
         } else if rich_state.image_cache.is_loading(&url) {
-            Self::render_loading(frame, image_area);
+            Self::render_loading(frame, image_area, theme);
         } else {
-            Self::render_no_image(frame, image_area, "Image not loaded");
+            Self::render_no_image(frame, image_area, "Image not loaded", theme);
         }
 
         // Render status bar
-        Self::render_status_bar(frame, status_area, actual_index + 1, image_count);
+        Self::render_status_bar(frame, status_area, actual_index + 1, image_count, theme);
     }
 
     /// Render status bar with navigation hints
-    fn render_status_bar(frame: &mut Frame, area: Rect, current: usize, total: usize) {
+    fn render_status_bar(frame: &mut Frame, area: Rect, current: usize, total: usize, theme: &Theme) {
         let status = Line::from(vec![
             Span::styled(
                 format!(" Image {}/{} ", current, total),
                 Style::default()
-                    .fg(GruvboxMaterial::BG0)
-                    .bg(GruvboxMaterial::YELLOW)
+                    .fg(theme.bg0)
+                    .bg(theme.yellow)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
-            Span::styled("n/→", Style::default().fg(GruvboxMaterial::AQUA)),
-            Span::styled(" next ", Style::default().fg(GruvboxMaterial::FG0)),
-            Span::styled("p/←", Style::default().fg(GruvboxMaterial::AQUA)),
-            Span::styled(" prev ", Style::default().fg(GruvboxMaterial::FG0)),
-            Span::styled("o", Style::default().fg(GruvboxMaterial::AQUA)),
-            Span::styled(" open externally ", Style::default().fg(GruvboxMaterial::FG0)),
-            Span::styled("q/Esc", Style::default().fg(GruvboxMaterial::AQUA)),
-            Span::styled(" close", Style::default().fg(GruvboxMaterial::FG0)),
+            Span::styled("n/→", Style::default().fg(theme.aqua)),
+            Span::styled(" next ", Style::default().fg(theme.fg0)),
+            Span::styled("p/←", Style::default().fg(theme.aqua)),
+            Span::styled(" prev ", Style::default().fg(theme.fg0)),
+            Span::styled("o", Style::default().fg(theme.aqua)),
+            Span::styled(" open externally ", Style::default().fg(theme.fg0)),
+            Span::styled("q/Esc", Style::default().fg(theme.aqua)),
+            Span::styled(" close", Style::default().fg(theme.fg0)),
         ]);
 
-        let paragraph = Paragraph::new(status).style(Style::default().bg(GruvboxMaterial::BG1));
+        let paragraph = Paragraph::new(status).style(Style::default().bg(theme.bg1));
         frame.render_widget(paragraph, area);
     }
 
     /// Render loading message
-    fn render_loading(frame: &mut Frame, area: Rect) {
+    fn render_loading(frame: &mut Frame, area: Rect, theme: &Theme) {
         let message = Line::from(Span::styled(
             "Loading image...",
             Style::default()
-                .fg(GruvboxMaterial::YELLOW)
+                .fg(theme.yellow)
                 .add_modifier(Modifier::BOLD),
         ));
         let paragraph = Paragraph::new(message)
-            .style(Style::default().bg(GruvboxMaterial::BG0))
+            .style(Style::default().bg(theme.bg0))
             .alignment(ratatui::layout::Alignment::Center);
 
         // Center vertically
@@ -167,15 +168,15 @@ impl ImageViewerWidget {
     }
 
     /// Render "no image" message
-    fn render_no_image(frame: &mut Frame, area: Rect, message: &str) {
+    fn render_no_image(frame: &mut Frame, area: Rect, message: &str, theme: &Theme) {
         let message = Line::from(Span::styled(
             message,
             Style::default()
-                .fg(GruvboxMaterial::GREY1)
+                .fg(theme.grey1)
                 .add_modifier(Modifier::ITALIC),
         ));
         let paragraph = Paragraph::new(message)
-            .style(Style::default().bg(GruvboxMaterial::BG0))
+            .style(Style::default().bg(theme.bg0))
             .alignment(ratatui::layout::Alignment::Center);
 
         // Center vertically

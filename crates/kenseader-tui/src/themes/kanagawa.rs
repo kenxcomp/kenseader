@@ -1,0 +1,95 @@
+//! Kanagawa theme variants
+//! https://github.com/rebelot/kanagawa.nvim
+
+use ratatui::style::Color;
+use crate::theme::Theme;
+
+/// Kanagawa Wave (default dark)
+pub fn wave() -> Theme {
+    Theme {
+        bg0: Color::Rgb(0x1f, 0x1f, 0x28), // sumiInk1
+        bg1: Color::Rgb(0x2a, 0x2a, 0x37), // sumiInk3
+        bg2: Color::Rgb(0x36, 0x36, 0x46), // sumiInk4
+        bg3: Color::Rgb(0x54, 0x54, 0x6d), // sumiInk5
+        fg0: Color::Rgb(0xdc, 0xd7, 0xba), // fujiWhite
+        fg1: Color::Rgb(0xc8, 0xc0, 0x93), // oldWhite
+        grey0: Color::Rgb(0x72, 0x72, 0x69), // fujiGray
+        grey1: Color::Rgb(0x54, 0x54, 0x6d), // sumiInk5
+        grey2: Color::Rgb(0x9c, 0x9c, 0x9c), // lighter gray
+        red: Color::Rgb(0xc3, 0x40, 0x43), // autumnRed
+        orange: Color::Rgb(0xff, 0xa0, 0x66), // surimiOrange
+        yellow: Color::Rgb(0xc0, 0xa3, 0x6e), // boatYellow2
+        green: Color::Rgb(0x76, 0x94, 0x6a),  // autumnGreen
+        aqua: Color::Rgb(0x7f, 0xb4, 0xca),   // waveAqua2
+        blue: Color::Rgb(0x7e, 0x9c, 0xd8),   // crystalBlue
+        purple: Color::Rgb(0x95, 0x7f, 0xb8), // oniViolet
+        selection: Color::Rgb(0x36, 0x36, 0x46),
+        unread: Color::Rgb(0xc0, 0xa3, 0x6e),
+        read: Color::Rgb(0x72, 0x72, 0x69),
+        error: Color::Rgb(0xc3, 0x40, 0x43),
+        success: Color::Rgb(0x76, 0x94, 0x6a),
+        warning: Color::Rgb(0xff, 0xa0, 0x66),
+        info: Color::Rgb(0x7e, 0x9c, 0xd8),
+        accent: Color::Rgb(0x7f, 0xb4, 0xca),
+    }
+}
+
+/// Kanagawa Dragon (darker)
+pub fn dragon() -> Theme {
+    Theme {
+        bg0: Color::Rgb(0x18, 0x16, 0x16), // dragonBlack3
+        bg1: Color::Rgb(0x0d, 0x0c, 0x0c), // dragonBlack0
+        bg2: Color::Rgb(0x28, 0x26, 0x27), // dragonBlack5
+        bg3: Color::Rgb(0x39, 0x36, 0x36), // dragonBlack6
+        fg0: Color::Rgb(0xc5, 0xc9, 0xc5), // dragonWhite
+        fg1: Color::Rgb(0x9e, 0x9b, 0x93), // dragonGray2
+        grey0: Color::Rgb(0x62, 0x5e, 0x5a), // dragonGray
+        grey1: Color::Rgb(0xa6, 0xa6, 0x9a), // dragonGray3
+        grey2: Color::Rgb(0xb4, 0xb4, 0xa8), // lighter
+        red: Color::Rgb(0xc4, 0x74, 0x6e),    // dragonRed
+        orange: Color::Rgb(0xb6, 0x92, 0x7b), // dragonOrange
+        yellow: Color::Rgb(0xc4, 0xb2, 0x8a), // dragonYellow
+        green: Color::Rgb(0x87, 0xa9, 0x87),  // dragonGreen2
+        aqua: Color::Rgb(0x8e, 0xa4, 0xa2),   // dragonAqua
+        blue: Color::Rgb(0x8b, 0xa4, 0xb0),   // dragonBlue2
+        purple: Color::Rgb(0xa2, 0x92, 0xa3), // dragonViolet
+        selection: Color::Rgb(0x28, 0x26, 0x27),
+        unread: Color::Rgb(0xc4, 0xb2, 0x8a),
+        read: Color::Rgb(0x62, 0x5e, 0x5a),
+        error: Color::Rgb(0xc4, 0x74, 0x6e),
+        success: Color::Rgb(0x87, 0xa9, 0x87),
+        warning: Color::Rgb(0xb6, 0x92, 0x7b),
+        info: Color::Rgb(0x8b, 0xa4, 0xb0),
+        accent: Color::Rgb(0x8e, 0xa4, 0xa2),
+    }
+}
+
+/// Kanagawa Lotus (light)
+pub fn lotus() -> Theme {
+    Theme {
+        bg0: Color::Rgb(0xf2, 0xec, 0xbc), // lotusWhite0
+        bg1: Color::Rgb(0xe5, 0xdd, 0xb0), // lotusWhite1
+        bg2: Color::Rgb(0xd5, 0xce, 0xa3), // lotusWhite2
+        bg3: Color::Rgb(0xc9, 0xc4, 0x99), // lotusWhite3
+        fg0: Color::Rgb(0x54, 0x54, 0x64), // lotusInk1
+        fg1: Color::Rgb(0x71, 0x6e, 0x61), // lotusInk2
+        grey0: Color::Rgb(0x8a, 0x89, 0x80), // lotusGray
+        grey1: Color::Rgb(0xa5, 0x96, 0x86), // lotusGray2
+        grey2: Color::Rgb(0xb8, 0xad, 0x9e), // lotusGray3
+        red: Color::Rgb(0xc8, 0x43, 0x53),    // lotusRed
+        orange: Color::Rgb(0xcc, 0x66, 0x00), // lotusOrange
+        yellow: Color::Rgb(0x77, 0x71, 0x3f), // lotusYellow
+        green: Color::Rgb(0x6f, 0x89, 0x4e),  // lotusGreen
+        aqua: Color::Rgb(0x59, 0x7b, 0x75),   // lotusAqua
+        blue: Color::Rgb(0x4d, 0x69, 0x9b),   // lotusBlue
+        purple: Color::Rgb(0x62, 0x46, 0x95), // lotusViolet3
+        selection: Color::Rgb(0xd5, 0xce, 0xa3),
+        unread: Color::Rgb(0x77, 0x71, 0x3f),
+        read: Color::Rgb(0x8a, 0x89, 0x80),
+        error: Color::Rgb(0xc8, 0x43, 0x53),
+        success: Color::Rgb(0x6f, 0x89, 0x4e),
+        warning: Color::Rgb(0xcc, 0x66, 0x00),
+        info: Color::Rgb(0x4d, 0x69, 0x9b),
+        accent: Color::Rgb(0x59, 0x7b, 0x75),
+    }
+}

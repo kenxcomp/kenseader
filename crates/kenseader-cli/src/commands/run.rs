@@ -26,6 +26,7 @@ use kenseader_tui::{
     event::{AppEvent, EventHandler, ImageLoadResult, RefreshResult},
     input::{handle_key_event, Action},
     keymap::Keymap,
+    load_theme,
     rich_content::{download_image, FocusableItem},
     widgets::{
         ArticleDetailWidget, ArticleListWidget, ImageViewerWidget, PopupWidget, StatusBarWidget,
@@ -72,11 +73,14 @@ pub async fn run(config: Arc<AppConfig>, read_mode: bool) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    // Load theme from config
+    let theme = load_theme(&config.ui.theme);
+
     // Create app state
     let mut app = if read_mode {
-        App::new_read_mode(config.clone())
+        App::new_read_mode(config.clone(), theme)
     } else {
-        App::new(client.clone().unwrap(), config.clone())
+        App::new(client.clone().unwrap(), config.clone(), theme)
     };
 
     // Load initial data
@@ -172,11 +176,11 @@ pub async fn run(config: Arc<AppConfig>, read_mode: bool) -> Result<()> {
                         .current_feed()
                         .map(|f| f.local_name.as_str())
                         .unwrap_or("Unknown");
-                    PopupWidget::render_delete_confirm(frame, feed_name);
+                    PopupWidget::render_delete_confirm(frame, feed_name, &app.theme);
                 }
                 Mode::BatchDeleteConfirm => {
                     let count = app.selected_feeds.len();
-                    PopupWidget::render_batch_delete_confirm(frame, count);
+                    PopupWidget::render_batch_delete_confirm(frame, count, &app.theme);
                 }
                 _ => {}
             }

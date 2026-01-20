@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::theme::GruvboxMaterial;
+use crate::theme::Theme;
 
 pub struct PopupWidget;
 
@@ -16,6 +16,7 @@ impl PopupWidget {
         frame: &mut Frame,
         title: &str,
         message: &str,
+        theme: &Theme,
     ) {
         let area = frame.area();
 
@@ -33,8 +34,8 @@ impl PopupWidget {
             .title(format!(" {} ", title))
             .title_alignment(Alignment::Center)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(GruvboxMaterial::ERROR))
-            .style(Style::default().bg(GruvboxMaterial::BG1));
+            .border_style(Style::default().fg(theme.error))
+            .style(Style::default().bg(theme.bg1));
 
         // Inner layout for content
         let inner_area = block.inner(popup_area);
@@ -56,7 +57,7 @@ impl PopupWidget {
             Span::styled(
                 message,
                 Style::default()
-                    .fg(GruvboxMaterial::FG0)
+                    .fg(theme.fg0)
                     .add_modifier(Modifier::BOLD),
             ),
         ]))
@@ -66,21 +67,21 @@ impl PopupWidget {
 
         // Render hint (y/n options)
         let hint_paragraph = Paragraph::new(Line::from(vec![
-            Span::styled("[", Style::default().fg(GruvboxMaterial::GREY1)),
+            Span::styled("[", Style::default().fg(theme.grey1)),
             Span::styled(
                 "y",
                 Style::default()
-                    .fg(GruvboxMaterial::GREEN)
+                    .fg(theme.green)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("]es  [", Style::default().fg(GruvboxMaterial::GREY1)),
+            Span::styled("]es  [", Style::default().fg(theme.grey1)),
             Span::styled(
                 "n",
                 Style::default()
-                    .fg(GruvboxMaterial::ERROR)
+                    .fg(theme.error)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("]o", Style::default().fg(GruvboxMaterial::GREY1)),
+            Span::styled("]o", Style::default().fg(theme.grey1)),
         ]))
         .alignment(Alignment::Center);
 
@@ -88,15 +89,15 @@ impl PopupWidget {
     }
 
     /// Render a delete confirmation popup for a single feed
-    pub fn render_delete_confirm(frame: &mut Frame, feed_name: &str) {
+    pub fn render_delete_confirm(frame: &mut Frame, feed_name: &str, theme: &Theme) {
         let message = format!("Delete feed \"{}\"?", truncate_str(feed_name, 30));
-        Self::render_confirm(frame, "Confirm Delete", &message);
+        Self::render_confirm(frame, "Confirm Delete", &message, theme);
     }
 
     /// Render a batch delete confirmation popup
-    pub fn render_batch_delete_confirm(frame: &mut Frame, count: usize) {
+    pub fn render_batch_delete_confirm(frame: &mut Frame, count: usize, theme: &Theme) {
         let message = format!("Delete {} selected feeds?", count);
-        Self::render_confirm(frame, "Confirm Batch Delete", &message);
+        Self::render_confirm(frame, "Confirm Batch Delete", &message, theme);
     }
 }
 

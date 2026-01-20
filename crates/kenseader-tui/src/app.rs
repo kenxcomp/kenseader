@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::image_renderer::ImageRenderer;
 use crate::rich_content::{ArticleImageCache, ContentElement, FocusableItem, PreloadCache, ResizedImageCache, RichContent};
+use crate::theme::Theme;
 
 /// Rich content state for the current article
 pub struct RichArticleState {
@@ -270,6 +271,8 @@ pub struct App {
     /// Read-mode: TUI reads directly from data_dir without daemon
     /// Disables refresh, feed add/delete; allows read status toggle with retry
     pub read_mode: bool,
+    /// Current color theme
+    pub theme: Theme,
 }
 
 /// Spinner animation frames (braille pattern)
@@ -277,17 +280,17 @@ pub const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', 
 
 impl App {
     /// Create a new App with daemon client (normal mode)
-    pub fn new(client: Arc<DaemonClient>, config: Arc<AppConfig>) -> Self {
-        Self::new_with_mode(Some(client), config, false)
+    pub fn new(client: Arc<DaemonClient>, config: Arc<AppConfig>, theme: Theme) -> Self {
+        Self::new_with_mode(Some(client), config, false, theme)
     }
 
     /// Create a new App in read-mode (direct database access, no daemon)
-    pub fn new_read_mode(config: Arc<AppConfig>) -> Self {
-        Self::new_with_mode(None, config, true)
+    pub fn new_read_mode(config: Arc<AppConfig>, theme: Theme) -> Self {
+        Self::new_with_mode(None, config, true, theme)
     }
 
     /// Internal constructor with mode selection
-    fn new_with_mode(client: Option<Arc<DaemonClient>>, config: Arc<AppConfig>, read_mode: bool) -> Self {
+    fn new_with_mode(client: Option<Arc<DaemonClient>>, config: Arc<AppConfig>, read_mode: bool, theme: Theme) -> Self {
         Self {
             client,
             config,
@@ -318,6 +321,7 @@ impl App {
             spinner_frame: 0,
             preload_cache: PreloadCache::new(None), // Initialized without disk cache, will be set later
             read_mode,
+            theme,
         }
     }
 
