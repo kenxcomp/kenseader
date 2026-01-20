@@ -68,7 +68,11 @@ enum Commands {
 #[derive(Subcommand)]
 enum DaemonAction {
     /// Start the background daemon
-    Start,
+    Start {
+        /// Run in foreground (for launchd/systemd/brew services)
+        #[arg(long)]
+        foreground: bool,
+    },
     /// Stop the background daemon
     Stop,
     /// Check daemon status
@@ -91,7 +95,7 @@ async fn main() -> Result<()> {
     let config = Arc::new(AppConfig::load()?);
 
     // Check if this is a daemon start command - run migration before database init
-    if let Some(Commands::Daemon { action: DaemonAction::Start }) = &cli.command {
+    if let Some(Commands::Daemon { action: DaemonAction::Start { .. } }) = &cli.command {
         commands::daemon::maybe_migrate_data(&config)?;
     }
 
@@ -132,7 +136,7 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Daemon { action }) => {
             match action {
-                DaemonAction::Start => commands::daemon::start(db, config).await,
+                DaemonAction::Start { foreground } => commands::daemon::start(db, config, foreground).await,
                 DaemonAction::Stop => commands::daemon::stop().await,
                 DaemonAction::Status => commands::daemon::status().await,
             }

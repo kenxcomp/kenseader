@@ -204,17 +204,24 @@ pub fn maybe_migrate_data(config: &AppConfig) -> Result<()> {
 }
 
 /// Start the daemon
-pub async fn start(db: Arc<Database>, config: Arc<AppConfig>) -> Result<()> {
-    // Check if already running
-    if let Some(pid) = is_daemon_running() {
-        println!("Daemon is already running (PID: {})", pid);
-        return Ok(());
+///
+/// When `foreground` is true, the daemon runs in foreground mode (for launchd/systemd/brew services).
+/// In foreground mode, PID file management is skipped since the service manager handles process lifecycle.
+pub async fn start(db: Arc<Database>, config: Arc<AppConfig>, foreground: bool) -> Result<()> {
+    if !foreground {
+        // Check if already running (only in background mode)
+        if let Some(pid) = is_daemon_running() {
+            println!("Daemon is already running (PID: {})", pid);
+            return Ok(());
+        }
     }
 
-    println!("Starting kenseader daemon...");
+    println!("Starting kenseader daemon{}...", if foreground { " (foreground mode)" } else { "" });
 
-    // Write PID file
-    write_pid_file()?;
+    // Write PID file (only in background mode)
+    if !foreground {
+        write_pid_file()?;
+    }
 
     // Create shutdown channel
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -281,7 +288,9 @@ pub async fn start(db: Arc<Database>, config: Arc<AppConfig>) -> Result<()> {
     }
 
     // Cleanup
-    remove_pid_file();
+    if !foreground {
+        remove_pid_file();
+    }
     println!("Daemon stopped.");
 
     Ok(())
