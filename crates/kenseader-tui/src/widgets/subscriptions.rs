@@ -7,18 +7,18 @@ use ratatui::{
 };
 
 use crate::app::{App, Focus};
-use crate::theme::GruvboxMaterial;
 
 pub struct SubscriptionsWidget;
 
 impl SubscriptionsWidget {
     pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+        let theme = &app.theme;
         let is_focused = app.focus == Focus::Subscriptions;
 
         let border_style = if is_focused {
-            Style::default().fg(GruvboxMaterial::ACCENT)
+            Style::default().fg(theme.accent)
         } else {
-            Style::default().fg(GruvboxMaterial::GREY0)
+            Style::default().fg(theme.grey0)
         };
 
         // Use visible feeds based on view mode
@@ -28,7 +28,7 @@ impl SubscriptionsWidget {
             .title(" Subscriptions ")
             .borders(Borders::ALL)
             .border_style(border_style)
-            .style(Style::default().bg(GruvboxMaterial::BG0));
+            .style(Style::default().bg(theme.bg0));
 
         // Calculate selected index in visible feeds
         let selected_visible_idx = app.actual_to_visible_feed_index(app.selected_feed);
@@ -59,27 +59,27 @@ impl SubscriptionsWidget {
                 // Priority: marked > cursor > error > unread > read
                 let style = if is_marked {
                     Style::default()
-                        .fg(GruvboxMaterial::FG0)
-                        .bg(GruvboxMaterial::PURPLE)
+                        .fg(theme.fg0)
+                        .bg(theme.purple)
                         .add_modifier(Modifier::BOLD)
                 } else if is_cursor && is_focused {
                     Style::default()
-                        .fg(GruvboxMaterial::FG0)
-                        .bg(GruvboxMaterial::SELECTION)
+                        .fg(theme.fg0)
+                        .bg(theme.selection)
                         .add_modifier(Modifier::BOLD)
                 } else if feed.has_error() {
                     // Feeds with fetch errors are shown in red
-                    Style::default().fg(GruvboxMaterial::ERROR)
+                    Style::default().fg(theme.error)
                 } else if feed.unread_count > 0 {
-                    Style::default().fg(GruvboxMaterial::UNREAD)
+                    Style::default().fg(theme.unread)
                 } else {
-                    Style::default().fg(GruvboxMaterial::READ)
+                    Style::default().fg(theme.read)
                 };
 
                 let select_style = if is_marked {
-                    Style::default().fg(GruvboxMaterial::GREEN)
+                    Style::default().fg(theme.green)
                 } else {
-                    Style::default().fg(GruvboxMaterial::GREY1)
+                    Style::default().fg(theme.grey1)
                 };
 
                 // Add error indicator for feeds with errors
@@ -88,8 +88,8 @@ impl SubscriptionsWidget {
                 let line = Line::from(vec![
                     Span::styled(select_marker, select_style),
                     Span::styled(name.clone(), style),
-                    Span::styled(error_indicator, Style::default().fg(GruvboxMaterial::ERROR)),
-                    Span::styled(unread, Style::default().fg(GruvboxMaterial::YELLOW)),
+                    Span::styled(error_indicator, Style::default().fg(theme.error)),
+                    Span::styled(unread, Style::default().fg(theme.yellow)),
                 ]);
 
                 ListItem::new(line)
@@ -100,7 +100,7 @@ impl SubscriptionsWidget {
             .block(block)
             .highlight_style(
                 Style::default()
-                    .bg(GruvboxMaterial::SELECTION)
+                    .bg(theme.selection)
                     .add_modifier(Modifier::BOLD),
             );
 

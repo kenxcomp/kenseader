@@ -11,7 +11,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{App, Focus, RichArticleState};
 use crate::image_renderer::RenderBackend;
 use crate::rich_content::{ContentElement, ImageState, parse_text_with_urls, ResizedImageCache, TextSpan};
-use crate::theme::GruvboxMaterial;
+use crate::theme::Theme;
 
 /// Information about an image to render
 struct ImageRenderInfo {
@@ -29,19 +29,20 @@ pub struct ArticleDetailWidget;
 
 impl ArticleDetailWidget {
     pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
+        let theme = &app.theme;
         let is_focused = app.focus == Focus::ArticleDetail;
 
         let border_style = if is_focused {
-            Style::default().fg(GruvboxMaterial::ACCENT)
+            Style::default().fg(theme.accent)
         } else {
-            Style::default().fg(GruvboxMaterial::GREY0)
+            Style::default().fg(theme.grey0)
         };
 
         let block = Block::default()
             .title(" Article ")
             .borders(Borders::ALL)
             .border_style(border_style)
-            .style(Style::default().bg(GruvboxMaterial::BG0));
+            .style(Style::default().bg(theme.bg0));
 
         let inner_area = block.inner(area);
         frame.render_widget(block, area);
@@ -76,14 +77,15 @@ impl ArticleDetailWidget {
                     show_timestamps,
                     use_overlay,
                     &mut image_infos,
+                    theme,
                 )
             } else {
-                Self::render_plain_content(&article, show_author, show_timestamps)
+                Self::render_plain_content(&article, show_author, show_timestamps, theme)
             }
         } else {
             Text::from(Line::from(Span::styled(
                 "No article selected",
-                Style::default().fg(GruvboxMaterial::GREY1),
+                Style::default().fg(theme.grey1),
             )))
         };
 
@@ -396,7 +398,7 @@ impl ArticleDetailWidget {
             if item.is_focused {
                 let border = Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(GruvboxMaterial::YELLOW));
+                    .border_style(Style::default().fg(app.theme.yellow));
                 frame.render_widget(border, item.image_area);
             }
 
@@ -484,6 +486,7 @@ impl ArticleDetailWidget {
         show_timestamps: bool,
         use_overlay: bool,
         image_infos: &mut Vec<ImageRenderInfo>,
+        theme: &Theme,
     ) -> Text<'a> {
         let mut lines: Vec<Line<'a>> = Vec::new();
         let mut current_y: u16 = 0;
@@ -493,7 +496,7 @@ impl ArticleDetailWidget {
         lines.push(Line::from(Span::styled(
             article.title.clone(),
             Style::default()
-                .fg(GruvboxMaterial::FG1)
+                .fg(theme.fg1)
                 .add_modifier(Modifier::BOLD),
         )));
         current_y += 1;
@@ -506,7 +509,7 @@ impl ArticleDetailWidget {
             if let Some(author) = &article.author {
                 meta_spans.push(Span::styled(
                     format!("By {} ", author),
-                    Style::default().fg(GruvboxMaterial::GREY2),
+                    Style::default().fg(theme.grey2),
                 ));
             }
         }
@@ -515,7 +518,7 @@ impl ArticleDetailWidget {
                 let separator = if meta_spans.is_empty() { "" } else { "| " };
                 meta_spans.push(Span::styled(
                     format!("{}{}", separator, date.format("%Y-%m-%d %H:%M")),
-                    Style::default().fg(GruvboxMaterial::GREY1),
+                    Style::default().fg(theme.grey1),
                 ));
             }
         }
@@ -528,7 +531,7 @@ impl ArticleDetailWidget {
 
         // Summary (if available) - render with box border
         if let Some(summary) = &article.summary {
-            let summary_lines = render_summary_box(summary, width as usize);
+            let summary_lines = render_summary_box(summary, width as usize, theme);
             let summary_height = summary_lines.len() as u16;
             lines.extend(summary_lines);
             current_y += summary_height;
@@ -555,6 +558,7 @@ impl ArticleDetailWidget {
                             &spans,
                             wrap_width,
                             focused_link_url.as_deref(),
+                            theme,
                         );
                         for line in rendered_lines {
                             lines.push(line);
@@ -566,7 +570,7 @@ impl ArticleDetailWidget {
                         for line in wrapped {
                             lines.push(Line::from(Span::styled(
                                 line,
-                                Style::default().fg(GruvboxMaterial::FG0),
+                                Style::default().fg(theme.fg0),
                             )));
                             current_y += 1;
                         }
@@ -575,13 +579,13 @@ impl ArticleDetailWidget {
                 ContentElement::Heading(level, text) => {
                     let style = match level {
                         1 => Style::default()
-                            .fg(GruvboxMaterial::ORANGE)
+                            .fg(theme.orange)
                             .add_modifier(Modifier::BOLD),
                         2 => Style::default()
-                            .fg(GruvboxMaterial::YELLOW)
+                            .fg(theme.yellow)
                             .add_modifier(Modifier::BOLD),
                         _ => Style::default()
-                            .fg(GruvboxMaterial::AQUA)
+                            .fg(theme.aqua)
                             .add_modifier(Modifier::BOLD),
                     };
                     // Wrap heading text
@@ -628,6 +632,7 @@ impl ArticleDetailWidget {
                             width as u32,
                             image_height as u32,
                             is_image_focused,
+                            theme,
                         );
                         let line_count = image_lines.len() as u16;
                         lines.extend(image_lines);
@@ -641,11 +646,11 @@ impl ArticleDetailWidget {
                     let wrapped = wrap_text_unicode(&text, quote_width);
                     for line in wrapped {
                         lines.push(Line::from(vec![
-                            Span::styled("| ", Style::default().fg(GruvboxMaterial::GREY1)),
+                            Span::styled("| ", Style::default().fg(theme.grey1)),
                             Span::styled(
                                 line,
                                 Style::default()
-                                    .fg(GruvboxMaterial::FG0)
+                                    .fg(theme.fg0)
                                     .add_modifier(Modifier::ITALIC),
                             ),
                         ]));
@@ -657,21 +662,21 @@ impl ArticleDetailWidget {
                 ContentElement::Code(text) => {
                     lines.push(Line::from(Span::styled(
                         "```",
-                        Style::default().fg(GruvboxMaterial::GREY1),
+                        Style::default().fg(theme.grey1),
                     )));
                     current_y += 1;
                     for line in text.lines() {
                         lines.push(Line::from(Span::styled(
                             line.to_string(),
                             Style::default()
-                                .fg(GruvboxMaterial::GREEN)
-                                .bg(GruvboxMaterial::BG1),
+                                .fg(theme.green)
+                                .bg(theme.bg1),
                         )));
                         current_y += 1;
                     }
                     lines.push(Line::from(Span::styled(
                         "```",
-                        Style::default().fg(GruvboxMaterial::GREY1),
+                        Style::default().fg(theme.grey1),
                     )));
                     current_y += 1;
                     lines.push(Line::from(""));
@@ -684,14 +689,14 @@ impl ArticleDetailWidget {
                     for (i, line) in wrapped.iter().enumerate() {
                         if i == 0 {
                             lines.push(Line::from(vec![
-                                Span::styled("• ", Style::default().fg(GruvboxMaterial::AQUA)),
-                                Span::styled(line.clone(), Style::default().fg(GruvboxMaterial::FG0)),
+                                Span::styled("• ", Style::default().fg(theme.aqua)),
+                                Span::styled(line.clone(), Style::default().fg(theme.fg0)),
                             ]));
                         } else {
                             // Continuation lines indented
                             lines.push(Line::from(vec![
                                 Span::styled("  ", Style::default()),
-                                Span::styled(line.clone(), Style::default().fg(GruvboxMaterial::FG0)),
+                                Span::styled(line.clone(), Style::default().fg(theme.fg0)),
                             ]));
                         }
                         current_y += 1;
@@ -700,7 +705,7 @@ impl ArticleDetailWidget {
                 ContentElement::Separator => {
                     lines.push(Line::from(Span::styled(
                         "─".repeat(40.min(width as usize)),
-                        Style::default().fg(GruvboxMaterial::GREY0),
+                        Style::default().fg(theme.grey0),
                     )));
                     current_y += 1;
                 }
@@ -717,7 +722,7 @@ impl ArticleDetailWidget {
             let tags_str = article.tags.join(" | ");
             lines.push(Line::from(Span::styled(
                 format!("Tags: {}", tags_str),
-                Style::default().fg(GruvboxMaterial::PURPLE),
+                Style::default().fg(theme.purple),
             )));
         }
 
@@ -735,7 +740,7 @@ impl ArticleDetailWidget {
             }
             lines.push(Line::from(Span::styled(
                 hints.join(" | "),
-                Style::default().fg(GruvboxMaterial::GREY1),
+                Style::default().fg(theme.grey1),
             )));
         }
 
@@ -750,11 +755,12 @@ impl ArticleDetailWidget {
         width: u32,
         height: u32,
         is_focused: bool,
+        theme: &Theme,
     ) -> Vec<Line<'a>> {
         let focus_style = if is_focused {
-            Style::default().fg(GruvboxMaterial::YELLOW)
+            Style::default().fg(theme.yellow)
         } else {
-            Style::default().fg(GruvboxMaterial::GREY1)
+            Style::default().fg(theme.grey1)
         };
 
         match image_cache.images.get_mut(url) {
@@ -767,7 +773,7 @@ impl ArticleDetailWidget {
                         0,
                         Line::from(Span::styled(
                             format!("┌{:─^width$}┐", " Image (focused) ", width = width as usize - 2),
-                            Style::default().fg(GruvboxMaterial::YELLOW),
+                            Style::default().fg(theme.yellow),
                         )),
                     );
                 }
@@ -794,9 +800,9 @@ impl ArticleDetailWidget {
                     Line::from(Span::styled(
                         display,
                         if is_focused {
-                            Style::default().fg(GruvboxMaterial::YELLOW)
+                            Style::default().fg(theme.yellow)
                         } else {
-                            Style::default().fg(GruvboxMaterial::RED)
+                            Style::default().fg(theme.red)
                         },
                     )),
                     Line::from(""),
@@ -821,6 +827,7 @@ impl ArticleDetailWidget {
         article: &kenseader_core::feed::Article,
         show_author: bool,
         show_timestamps: bool,
+        theme: &Theme,
     ) -> Text<'a> {
         let mut lines = Vec::new();
 
@@ -828,7 +835,7 @@ impl ArticleDetailWidget {
         lines.push(Line::from(Span::styled(
             article.title.clone(),
             Style::default()
-                .fg(GruvboxMaterial::FG1)
+                .fg(theme.fg1)
                 .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
@@ -839,7 +846,7 @@ impl ArticleDetailWidget {
             if let Some(author) = &article.author {
                 meta_spans.push(Span::styled(
                     format!("By {} ", author),
-                    Style::default().fg(GruvboxMaterial::GREY2),
+                    Style::default().fg(theme.grey2),
                 ));
             }
         }
@@ -848,7 +855,7 @@ impl ArticleDetailWidget {
                 let separator = if meta_spans.is_empty() { "" } else { "| " };
                 meta_spans.push(Span::styled(
                     format!("{}{}", separator, date.format("%Y-%m-%d %H:%M")),
-                    Style::default().fg(GruvboxMaterial::GREY1),
+                    Style::default().fg(theme.grey1),
                 ));
             }
         }
@@ -859,7 +866,7 @@ impl ArticleDetailWidget {
 
         // Summary (if available) - render with box border
         if let Some(summary) = &article.summary {
-            let summary_lines = render_summary_box(summary, 70); // Fixed width for plain content
+            let summary_lines = render_summary_box(summary, 70, theme); // Fixed width for plain content
             lines.extend(summary_lines);
             lines.push(Line::from(""));
         }
@@ -869,7 +876,7 @@ impl ArticleDetailWidget {
             for line in content_text.lines() {
                 lines.push(Line::from(Span::styled(
                     line.to_string(),
-                    Style::default().fg(GruvboxMaterial::FG0),
+                    Style::default().fg(theme.fg0),
                 )));
             }
         }
@@ -880,7 +887,7 @@ impl ArticleDetailWidget {
             let tags_str = article.tags.join(" | ");
             lines.push(Line::from(Span::styled(
                 format!("Tags: {}", tags_str),
-                Style::default().fg(GruvboxMaterial::PURPLE),
+                Style::default().fg(theme.purple),
             )));
         }
 
@@ -889,7 +896,7 @@ impl ArticleDetailWidget {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "Press 'b' to open in browser",
-                Style::default().fg(GruvboxMaterial::GREY1),
+                Style::default().fg(theme.grey1),
             )));
         }
 
@@ -979,8 +986,8 @@ fn truncate_url(url: &str, max_len: usize) -> String {
 }
 
 /// Render summary text in a styled box with proper unicode width handling
-fn render_summary_box<'a>(summary: &str, max_width: usize) -> Vec<Line<'a>> {
-    let border_color = GruvboxMaterial::AQUA;
+fn render_summary_box<'a>(summary: &str, max_width: usize, theme: &Theme) -> Vec<Line<'a>> {
+    let border_color = theme.aqua;
     let title = " AI Summary ";
 
     // Box inner width (excluding border characters "│ " and " │")
@@ -998,7 +1005,7 @@ fn render_summary_box<'a>(summary: &str, max_width: usize) -> Vec<Line<'a>> {
     lines.push(Line::from(vec![
         Span::styled("╭", Style::default().fg(border_color)),
         Span::styled("─".repeat(left_dashes), Style::default().fg(border_color)),
-        Span::styled(title, Style::default().fg(GruvboxMaterial::YELLOW).add_modifier(Modifier::BOLD)),
+        Span::styled(title, Style::default().fg(theme.yellow).add_modifier(Modifier::BOLD)),
         Span::styled("─".repeat(right_dashes), Style::default().fg(border_color)),
         Span::styled("╮", Style::default().fg(border_color)),
     ]));
@@ -1010,8 +1017,8 @@ fn render_summary_box<'a>(summary: &str, max_width: usize) -> Vec<Line<'a>> {
         let padding = inner_width.saturating_sub(content_width);
         lines.push(Line::from(vec![
             Span::styled("│ ", Style::default().fg(border_color)),
-            Span::styled(content, Style::default().fg(GruvboxMaterial::FG0)),
-            Span::styled(" ".repeat(padding), Style::default().fg(GruvboxMaterial::FG0)),
+            Span::styled(content, Style::default().fg(theme.fg0)),
+            Span::styled(" ".repeat(padding), Style::default().fg(theme.fg0)),
             Span::styled(" │", Style::default().fg(border_color)),
         ]));
     }
@@ -1073,19 +1080,20 @@ fn render_text_with_links<'a>(
     spans: &[TextSpan],
     max_width: usize,
     focused_url: Option<&str>,
+    theme: &Theme,
 ) -> Vec<Line<'a>> {
     let mut lines: Vec<Line<'a>> = Vec::new();
     let mut current_line_spans: Vec<Span<'a>> = Vec::new();
     let mut current_width = 0usize;
 
     // Define styles
-    let normal_style = Style::default().fg(GruvboxMaterial::FG0);
+    let normal_style = Style::default().fg(theme.fg0);
     let link_style = Style::default()
-        .fg(GruvboxMaterial::BLUE)
+        .fg(theme.blue)
         .add_modifier(Modifier::UNDERLINED);
     let focused_link_style = Style::default()
-        .fg(GruvboxMaterial::BLUE)
-        .bg(GruvboxMaterial::YELLOW)
+        .fg(theme.blue)
+        .bg(theme.yellow)
         .add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
 
     for span in spans {

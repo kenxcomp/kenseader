@@ -7,12 +7,12 @@ use ratatui::{
 };
 
 use crate::app::{App, Focus, Mode, ViewMode};
-use crate::theme::GruvboxMaterial;
 
 pub struct StatusBarWidget;
 
 impl StatusBarWidget {
     pub fn render(frame: &mut Frame, area: Rect, app: &App) {
+        let theme = &app.theme;
         // Check if in search mode - show search input prominently
         let is_search_mode = app.is_input_mode();
 
@@ -103,21 +103,21 @@ impl StatusBarWidget {
             Span::styled(
                 status_text,
                 Style::default()
-                    .fg(GruvboxMaterial::FG0)
-                    .bg(GruvboxMaterial::BG2),
+                    .fg(theme.fg0)
+                    .bg(theme.bg2),
             ),
             Span::styled(
                 " ".repeat(area.width as usize)
                     .chars()
                     .take(padding_len)
                     .collect::<String>(),
-                Style::default().bg(GruvboxMaterial::BG2),
+                Style::default().bg(theme.bg2),
             ),
             Span::styled(
                 help_hint,
                 Style::default()
-                    .fg(GruvboxMaterial::GREY2)
-                    .bg(GruvboxMaterial::BG2),
+                    .fg(theme.grey2)
+                    .bg(theme.bg2),
             ),
         ]);
 

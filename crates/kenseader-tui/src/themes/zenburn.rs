@@ -1,0 +1,35 @@
+//! Zenburn theme
+//! https://github.com/jnurmine/Zenburn
+
+use ratatui::style::Color;
+use crate::theme::Theme;
+
+/// Zenburn default theme
+pub fn default() -> Theme {
+    Theme {
+        bg0: Color::Rgb(0x3f, 0x3f, 0x3f), // bg
+        bg1: Color::Rgb(0x4f, 0x4f, 0x4f), // bg+1
+        bg2: Color::Rgb(0x5f, 0x5f, 0x5f), // bg+2
+        bg3: Color::Rgb(0x6f, 0x6f, 0x6f), // bg+3
+        fg0: Color::Rgb(0xdc, 0xdc, 0xcc), // fg
+        fg1: Color::Rgb(0xcc, 0xcc, 0xbc), // fg-1
+        grey0: Color::Rgb(0x70, 0x90, 0x80), // comment
+        grey1: Color::Rgb(0x5f, 0x7f, 0x5f), // green-4
+        grey2: Color::Rgb(0x87, 0x87, 0x87), // gray
+        red: Color::Rgb(0xcc, 0x93, 0x93),    // red
+        orange: Color::Rgb(0xdf, 0xaf, 0x8f), // orange
+        yellow: Color::Rgb(0xf0, 0xdf, 0xaf), // yellow
+        green: Color::Rgb(0x7f, 0x9f, 0x7f),  // green
+        aqua: Color::Rgb(0x8c, 0xd0, 0xd3),   // cyan
+        blue: Color::Rgb(0x94, 0xbf, 0xf3),   // blue
+        purple: Color::Rgb(0xdc, 0x8c, 0xc3), // magenta
+        selection: Color::Rgb(0x5f, 0x5f, 0x5f),
+        unread: Color::Rgb(0xf0, 0xdf, 0xaf),
+        read: Color::Rgb(0x70, 0x90, 0x80),
+        error: Color::Rgb(0xcc, 0x93, 0x93),
+        success: Color::Rgb(0x7f, 0x9f, 0x7f),
+        warning: Color::Rgb(0xdf, 0xaf, 0x8f),
+        info: Color::Rgb(0x94, 0xbf, 0xf3),
+        accent: Color::Rgb(0x8c, 0xd0, 0xd3),
+    }
+}

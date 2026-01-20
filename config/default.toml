@@ -81,6 +81,35 @@ show_timestamps = true
 # Enable image preview in terminal
 image_preview = true
 
+# Color theme (24 built-in themes available)
+# Options:
+#   Catppuccin: catppuccin-latte, catppuccin-frappe, catppuccin-macchiato, catppuccin-mocha
+#   Gruvbox: gruvbox-light, gruvbox-dark
+#   Dracula: dracula
+#   Nord: nord
+#   Tokyo Night: tokyo-night, tokyo-night-storm, tokyo-night-day
+#   One Dark: one-dark
+#   Solarized: solarized-light, solarized-dark
+#   Everforest: everforest-light, everforest-dark
+#   Kanagawa: kanagawa-wave, kanagawa-dragon, kanagawa-lotus
+#   Rose Pine: rose-pine, rose-pine-moon, rose-pine-dawn
+#   Monokai: monokai
+#   Zenburn: zenburn
+theme = "gruvbox-dark"
+
+# Optional: Override specific theme colors (use hex format)
+# [ui.theme_colors]
+# bg0 = "#1d2021"
+# fg0 = "#ebdbb2"
+# accent = "#8ec07c"
+# selection = "#504945"
+# unread = "#fabd2f"
+# read = "#928374"
+# error = "#fb4934"
+# success = "#b8bb26"
+# warning = "#fe8019"
+# info = "#83a598"
+
 [sync]
 # Scheduler check interval in seconds (0 = disabled)
 # This controls how often the scheduler runs to check for feeds that need refreshing
