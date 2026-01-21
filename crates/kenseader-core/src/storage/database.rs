@@ -1,4 +1,6 @@
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
+use std::path::Path;
+use std::time::Duration;
 
 use crate::config::AppConfig;
 use crate::Result;
@@ -19,18 +21,42 @@ impl Database {
             std::fs::create_dir_all(parent)?;
         }
 
+        // Clean up potentially stale lock files (for cloud sync scenarios)
+        if db_path.exists() {
+            Self::cleanup_stale_locks(&db_path)?;
+        }
+
         let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
 
         tracing::info!("Connecting to database: {}", db_path.display());
 
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
+            .acquire_timeout(Duration::from_secs(10))
             .connect(&db_url)
             .await?;
 
         // Configure SQLite PRAGMA for better concurrency with cloud sync scenarios
-        // This ensures busy_timeout is set at the connection level as a fallback
+        // busy_timeout: Wait up to 5 seconds when database is locked
         sqlx::query("PRAGMA busy_timeout = 5000")
+            .execute(&pool)
+            .await?;
+
+        // Enable WAL mode for better concurrent read/write performance
+        // WAL mode allows readers and writers to work simultaneously
+        sqlx::query("PRAGMA journal_mode = WAL")
+            .execute(&pool)
+            .await?;
+
+        // NORMAL synchronous mode - good balance between safety and performance
+        // Provides durability guarantees while being faster than FULL
+        sqlx::query("PRAGMA synchronous = NORMAL")
+            .execute(&pool)
+            .await?;
+
+        // Set WAL auto-checkpoint to 1000 pages (~4MB)
+        // This controls when WAL file is checkpointed back to main database
+        sqlx::query("PRAGMA wal_autocheckpoint = 1000")
             .execute(&pool)
             .await?;
 
@@ -120,6 +146,33 @@ impl Database {
     /// Get the connection pool
     pub fn pool(&self) -> &Pool<Sqlite> {
         &self.pool
+    }
+
+    /// Clean up potentially stale lock files from cloud sync scenarios
+    ///
+    /// When using cloud storage (iCloud, Dropbox, etc.), WAL lock files (.db-wal, .db-shm)
+    /// may become stale if another device held the lock but is no longer active.
+    /// This function removes lock files that haven't been modified in over 30 seconds.
+    fn cleanup_stale_locks(db_path: &Path) -> Result<()> {
+        let wal_path = db_path.with_extension("db-wal");
+        let shm_path = db_path.with_extension("db-shm");
+
+        for lock_path in [&wal_path, &shm_path] {
+            if lock_path.exists() {
+                if let Ok(metadata) = std::fs::metadata(lock_path) {
+                    if let Ok(modified) = metadata.modified() {
+                        if modified.elapsed().unwrap_or_default() > Duration::from_secs(30) {
+                            tracing::warn!(
+                                "Removing potentially stale lock file: {:?}",
+                                lock_path
+                            );
+                            let _ = std::fs::remove_file(lock_path);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
