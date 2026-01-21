@@ -34,6 +34,7 @@ kenseader run
 - 📚 **阅读历史** - `u` 返回，`Ctrl+r` 前进
 - 🔄 **后台调度** - 自动刷新、清理和 AI 处理
 - 💾 **SQLite 存储** - 快速本地数据库
+- ✨ **平滑滚动** - nvim 风格的平滑滚动动画，支持可配置的缓动函数
 
 ## 界面预览
 
@@ -180,6 +181,11 @@ summary_language = "Chinese"
 
 [ui]
 image_preview = true
+
+[ui.scroll]
+smooth_enabled = true        # 启用平滑滚动（默认：true）
+animation_duration_ms = 150  # 动画时长（毫秒）
+easing = "cubic"             # 缓动函数：none, linear, cubic, quintic, easeout
 
 [sync]
 refresh_interval_secs = 3600

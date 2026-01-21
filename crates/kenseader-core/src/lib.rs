@@ -7,6 +7,6 @@ pub mod profile;
 pub mod scheduler;
 pub mod ipc;
 
-pub use config::AppConfig;
+pub use config::{AppConfig, EasingType, ScrollConfig};
 pub use error::{Error, Result};
 pub use ipc::{DaemonClient, DaemonServer};
