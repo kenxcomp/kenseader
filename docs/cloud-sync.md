@@ -59,6 +59,36 @@ kenseader run --read-mode
 2. On other devices, just use read-mode: `kenseader run --read-mode`
 3. Cloud sync keeps the database in sync across all devices
 
+## Technical Details
+
+Kenseader uses several SQLite optimizations to enable reliable multi-device cloud sync:
+
+### WAL Mode (Write-Ahead Logging)
+
+The database uses WAL journal mode instead of the default DELETE mode. This provides:
+- **Concurrent reads and writes**: Multiple devices can read simultaneously while one writes
+- **Better performance**: Readers don't block writers and vice versa
+- **Crash recovery**: Incomplete transactions are automatically rolled back
+
+### Retry Mechanism
+
+Write operations (marking articles read, toggling bookmarks, etc.) include automatic retry logic:
+- On database busy/locked errors, operations retry up to 5 times
+- Uses exponential backoff (200ms, 400ms, 800ms, 1600ms, 3200ms)
+- Most concurrent access conflicts resolve within 1-2 retries
+
+### Lock File Handling
+
+On startup, the application checks for stale lock files (`.db-wal`, `.db-shm`) that may have been created by other devices and improperly synced. Files older than 30 seconds are automatically cleaned up.
+
+### PRAGMA Configuration
+
+The following SQLite settings optimize for cloud sync scenarios:
+- `busy_timeout = 5000` - Wait up to 5 seconds for locks
+- `journal_mode = WAL` - Enable WAL mode
+- `synchronous = NORMAL` - Balance between safety and performance
+- `wal_autocheckpoint = 1000` - Periodic WAL checkpointing
+
 ## Notes
 
 - The config file (`~/.config/kenseader/config.toml`) is NOT synced - it stays local
