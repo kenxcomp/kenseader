@@ -2,56 +2,10 @@ use chrono::{DateTime, Duration, Utc};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use super::retry::{execute_with_retry, query_with_retry};
 use super::Database;
 use crate::feed::{Article, NewArticle};
 use crate::Result;
-
-/// Maximum number of retry attempts for write operations
-const MAX_RETRIES: u32 = 5;
-
-/// Check if a SQLite error is a busy or locked error that should be retried
-fn is_busy_or_locked(err: &sqlx::Error) -> bool {
-    match err {
-        sqlx::Error::Database(db_err) => {
-            // SQLite error codes:
-            // 5 = SQLITE_BUSY - database is locked by another connection
-            // 6 = SQLITE_LOCKED - database table is locked
-            // 1032 = SQLITE_BUSY_SNAPSHOT - busy due to WAL snapshot
-            let code = db_err.code().map(|c| c.to_string());
-            matches!(code.as_deref(), Some("5") | Some("6") | Some("1032"))
-        }
-        _ => false,
-    }
-}
-
-/// Execute a write operation with exponential backoff retry for busy/locked errors
-///
-/// This is essential for cloud sync scenarios where multiple devices may
-/// access the same database file (via iCloud, Dropbox, etc.)
-async fn execute_with_retry<F, Fut>(operation: F) -> std::result::Result<(), sqlx::Error>
-where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<(), sqlx::Error>>,
-{
-    let mut attempts = 0;
-    loop {
-        match operation().await {
-            Ok(_) => return Ok(()),
-            Err(e) if is_busy_or_locked(&e) && attempts < MAX_RETRIES => {
-                attempts += 1;
-                let delay_ms = 100 * 2u64.pow(attempts);
-                tracing::debug!(
-                    "Database busy, retrying in {}ms (attempt {}/{})",
-                    delay_ms,
-                    attempts,
-                    MAX_RETRIES
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-}
 
 /// Repository for article CRUD operations
 pub struct ArticleRepository<'a> {
@@ -189,17 +143,27 @@ impl<'a> ArticleRepository<'a> {
 
     /// Find an article by ID
     pub async fn find_by_id(&self, id: Uuid) -> Result<Option<Article>> {
-        let row: Option<ArticleRow> = sqlx::query_as(
-            r#"
-            SELECT id, feed_id, guid, url, title, author, content, content_text,
-                   summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at, image_url, relevance_score
-            FROM articles
-            WHERE id = ?
-            "#,
-        )
-        .bind(id.to_string())
-        .fetch_optional(self.db.pool())
+        let pool = self.db.pool().clone();
+        let id_str = id.to_string();
+
+        let row: Option<ArticleRow> = query_with_retry(|| {
+            let pool = pool.clone();
+            let id_str = id_str.clone();
+            async move {
+                sqlx::query_as(
+                    r#"
+                    SELECT id, feed_id, guid, url, title, author, content, content_text,
+                           summary, summary_generated_at, published_at, fetched_at,
+                           is_read, read_at, is_saved, created_at, image_url, relevance_score
+                    FROM articles
+                    WHERE id = ?
+                    "#,
+                )
+                .bind(&id_str)
+                .fetch_optional(&pool)
+                .await
+            }
+        })
         .await?;
 
         match row {
@@ -234,10 +198,21 @@ impl<'a> ArticleRepository<'a> {
             "#
         };
 
-        let rows: Vec<ArticleRow> = sqlx::query_as(query)
-            .bind(feed_id.to_string())
-            .fetch_all(self.db.pool())
-            .await?;
+        let pool = self.db.pool().clone();
+        let feed_id_str = feed_id.to_string();
+
+        let rows: Vec<ArticleRow> = query_with_retry(|| {
+            let pool = pool.clone();
+            let feed_id_str = feed_id_str.clone();
+            let query = query;
+            async move {
+                sqlx::query_as(query)
+                    .bind(&feed_id_str)
+                    .fetch_all(&pool)
+                    .await
+            }
+        })
+        .await?;
 
         Ok(rows.into_iter().map(Article::from).collect())
     }
