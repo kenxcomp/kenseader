@@ -308,36 +308,49 @@ async fn handle_refresh_result(
 }
 
 /// Spawn an async task to load an image (from disk cache or download)
-/// Fully async - disk cache loading uses spawn_blocking to avoid blocking main thread
+/// Disk cache check is synchronous for fast cache hits; only decoding/download is async
 fn spawn_image_load(
     url: String,
     tx: mpsc::UnboundedSender<ImageLoadResult>,
     data_dir: Option<PathBuf>,
     _cache: &kenseader_tui::rich_content::ArticleImageCache,
 ) {
-    // Spawn fully async task for both disk cache and network loading
-    let data_dir_clone = data_dir.clone();
-    tokio::spawn(async move {
-        // First, try disk cache asynchronously (uses spawn_blocking internally)
-        if let Some(ref dir) = data_dir_clone {
-            if let Ok(disk_cache) = kenseader_tui::rich_content::ImageDiskCache::new(dir) {
-                if let Some(img) = disk_cache.load_async(&url).await {
-                    let cache_path = Some(disk_cache.cache_path(&url));
-                    let _ = tx.send(ImageLoadResult::Success {
-                        url,
-                        image: img,
-                        bytes: Vec::new(), // No need to re-save
-                        cache_path,
-                    });
-                    return;
-                }
+    // First, check if image exists in disk cache (fast synchronous check)
+    if let Some(ref dir) = data_dir {
+        if let Ok(disk_cache) = kenseader_tui::rich_content::ImageDiskCache::new(dir) {
+            if disk_cache.is_cached(&url) {
+                // Cache hit - spawn async task just for decoding (CPU-bound)
+                let cache_path = disk_cache.cache_path(&url);
+                let tx_clone = tx.clone();
+                let url_clone = url.clone();
+                tokio::spawn(async move {
+                    match kenseader_tui::rich_content::ImageDiskCache::load_async_from_path(&cache_path).await {
+                        Some(img) => {
+                            let _ = tx_clone.send(ImageLoadResult::Success {
+                                url: url_clone,
+                                image: img,
+                                bytes: Vec::new(),
+                                cache_path: Some(cache_path),
+                            });
+                        }
+                        None => {
+                            let _ = tx_clone.send(ImageLoadResult::Failure {
+                                url: url_clone,
+                                error: "Failed to decode cached image".to_string(),
+                            });
+                        }
+                    }
+                });
+                return;
             }
         }
+    }
 
-        // Disk cache miss - download from network
+    // Cache miss - spawn async task for network download
+    let data_dir_clone = data_dir.clone();
+    tokio::spawn(async move {
         match download_image(&url).await {
             Ok((bytes, image)) => {
-                // Calculate cache path for external viewer
                 let cache_path = data_dir_clone.and_then(|dir| {
                     kenseader_tui::rich_content::ImageDiskCache::new(&dir)
                         .ok()
@@ -407,32 +420,46 @@ fn process_preload(
 }
 
 /// Spawn an async task to load an image for preloading (from disk cache or download)
-/// Fully async - disk cache loading uses spawn_blocking to avoid blocking main thread
+/// Disk cache check is synchronous for fast cache hits; only decoding/download is async
 fn spawn_preload_image(
     url: String,
     tx: mpsc::UnboundedSender<ImageLoadResult>,
     data_dir: Option<PathBuf>,
 ) {
-    // Spawn fully async task for both disk cache and network loading
-    let data_dir_clone = data_dir.clone();
-    tokio::spawn(async move {
-        // First, try disk cache asynchronously (uses spawn_blocking internally)
-        if let Some(ref dir) = data_dir_clone {
-            if let Ok(disk_cache) = kenseader_tui::rich_content::ImageDiskCache::new(dir) {
-                if let Some(img) = disk_cache.load_async(&url).await {
-                    let cache_path = Some(disk_cache.cache_path(&url));
-                    let _ = tx.send(ImageLoadResult::Success {
-                        url,
-                        image: img,
-                        bytes: Vec::new(),
-                        cache_path,
-                    });
-                    return;
-                }
+    // First, check if image exists in disk cache (fast synchronous check)
+    if let Some(ref dir) = data_dir {
+        if let Ok(disk_cache) = kenseader_tui::rich_content::ImageDiskCache::new(dir) {
+            if disk_cache.is_cached(&url) {
+                // Cache hit - spawn async task just for decoding (CPU-bound)
+                let cache_path = disk_cache.cache_path(&url);
+                let tx_clone = tx.clone();
+                let url_clone = url.clone();
+                tokio::spawn(async move {
+                    match kenseader_tui::rich_content::ImageDiskCache::load_async_from_path(&cache_path).await {
+                        Some(img) => {
+                            let _ = tx_clone.send(ImageLoadResult::Success {
+                                url: url_clone,
+                                image: img,
+                                bytes: Vec::new(),
+                                cache_path: Some(cache_path),
+                            });
+                        }
+                        None => {
+                            let _ = tx_clone.send(ImageLoadResult::Failure {
+                                url: url_clone,
+                                error: "Failed to decode cached image".to_string(),
+                            });
+                        }
+                    }
+                });
+                return;
             }
         }
+    }
 
-        // Disk cache miss - download from network
+    // Cache miss - spawn async task for network download
+    let data_dir_clone = data_dir.clone();
+    tokio::spawn(async move {
         match download_image(&url).await {
             Ok((bytes, image)) => {
                 let cache_path = data_dir_clone.and_then(|dir| {

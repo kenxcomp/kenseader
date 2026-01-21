@@ -154,6 +154,13 @@ impl ImageDiskCache {
         if !path.exists() {
             return None;
         }
+        Self::load_async_from_path(&path).await
+    }
+
+    /// Load image from a specific path asynchronously (static method)
+    /// Uses spawn_blocking to avoid blocking the async runtime during I/O and decoding
+    pub async fn load_async_from_path(path: &PathBuf) -> Option<DynamicImage> {
+        let path = path.clone();
         tokio::task::spawn_blocking(move || image::open(&path).ok())
             .await
             .ok()
