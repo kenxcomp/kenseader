@@ -84,6 +84,13 @@ impl ScrollAnimator {
         self.animation.is_some()
     }
 
+    /// Check if there's pending work (animation or pending delta)
+    /// Use this to determine if we need high frame rate
+    #[inline]
+    pub fn needs_update(&self) -> bool {
+        self.animation.is_some() || self.pending_delta != 0
+    }
+
     /// Get the target scroll position (final position after animation)
     pub fn target_scroll(&self) -> u16 {
         self.animation

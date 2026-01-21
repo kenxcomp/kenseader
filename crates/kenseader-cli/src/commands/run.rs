@@ -107,6 +107,10 @@ pub async fn run(config: Arc<AppConfig>, read_mode: bool) -> Result<()> {
     // Create channel for async refresh results
     let (refresh_tx, mut refresh_rx) = mpsc::unbounded_channel::<RefreshResult>();
 
+    // Track if we need high frame rate for smooth scrolling
+    // This is checked at the END of each iteration to determine NEXT iteration's tick rate
+    let mut needs_fast_update = false;
+
     // Main loop
     loop {
         // Process any completed image loads (non-blocking)
@@ -139,11 +143,9 @@ pub async fn run(config: Arc<AppConfig>, read_mode: bool) -> Result<()> {
         }
 
         // Update scroll animation (when in ArticleDetail)
-        let is_animating = if app.focus == Focus::ArticleDetail {
-            app.update_scroll_animation()
-        } else {
-            false
-        };
+        if app.focus == Focus::ArticleDetail {
+            app.update_scroll_animation();
+        }
 
         // Draw UI
         terminal.draw(|frame| {
@@ -196,8 +198,8 @@ pub async fn run(config: Arc<AppConfig>, read_mode: bool) -> Result<()> {
             }
         })?;
 
-        // Handle events (use faster tick rate during animations)
-        let event = if is_animating {
+        // Handle events (use faster tick rate during animations or when pending scroll)
+        let event = if needs_fast_update {
             event_handler.next_animation()?
         } else {
             event_handler.next()?
@@ -220,6 +222,10 @@ pub async fn run(config: Arc<AppConfig>, read_mode: bool) -> Result<()> {
                 }
             }
         }
+
+        // Update fast update flag for next iteration
+        // This ensures we use high frame rate immediately after a scroll action
+        needs_fast_update = app.focus == Focus::ArticleDetail && app.needs_scroll_update();
 
         if app.should_quit {
             break;

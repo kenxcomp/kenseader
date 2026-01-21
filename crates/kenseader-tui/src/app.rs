@@ -836,6 +836,11 @@ impl App {
         self.scroll_animator.is_animating()
     }
 
+    /// Check if scroll needs high frame rate (animating or has pending work)
+    pub fn needs_scroll_update(&self) -> bool {
+        self.scroll_animator.needs_update()
+    }
+
     /// Scroll article detail down by one line (smooth)
     pub fn scroll_detail_down(&mut self) {
         let max_scroll = self.max_detail_scroll();
