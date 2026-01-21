@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use image::{DynamicImage, GenericImageView};
 use ratatui::{
     layout::Rect,
@@ -137,7 +139,8 @@ impl ArticleDetailWidget {
         };
 
         // Collect visible images and their render info
-        let mut visible_images: Vec<(String, image::DynamicImage, u16, u16, u16, u16)> = Vec::new();
+        // Uses Arc<DynamicImage> to avoid expensive deep cloning
+        let mut visible_images: Vec<(String, Arc<DynamicImage>, u16, u16, u16, u16)> = Vec::new();
 
         for img_info in images {
             // Calculate if image is visible in viewport
@@ -158,8 +161,8 @@ impl ArticleDetailWidget {
                 continue;
             };
 
-            // Clone image to avoid borrow issues
-            let image = cached.image.clone();
+            // Clone Arc (8 bytes, just reference count increment) instead of deep cloning image
+            let image = Arc::clone(&cached.image);
 
             // Calculate render position in viewport
             let render_y = if img_top_in_content >= scroll {
@@ -191,12 +194,13 @@ impl ArticleDetailWidget {
         let active_urls: Vec<String> = visible_images.iter().map(|(url, _, _, _, _, _)| url.clone()).collect();
 
         // Render each visible image using state-aware API
-        // Collect failed images for fallback rendering
-        let mut failed_images: Vec<(String, image::DynamicImage, u16, u16, u16, u16)> = Vec::new();
+        // Collect failed images for fallback rendering (uses Arc for efficiency)
+        let mut failed_images: Vec<(String, Arc<DynamicImage>, u16, u16, u16, u16)> = Vec::new();
 
         if let Some(ref mut kitty) = app.image_renderer.kitty_renderer() {
             for (url, image, x, y, width, height) in visible_images {
-                if let Err(e) = kitty.display_or_update(&url, &image, x, y, width, height) {
+                // Dereference Arc to get &DynamicImage for kitty API
+                if let Err(e) = kitty.display_or_update(&url, &*image, x, y, width, height) {
                     tracing::error!("Failed to display image via Kitty: {}", e);
                     // Collect for fallback rendering after releasing kitty borrow
                     failed_images.push((url, image, x, y, width, height));
@@ -215,7 +219,7 @@ impl ArticleDetailWidget {
                     Self::render_halfblocks_at_position(
                         frame,
                         render_area,
-                        &image,
+                        &*image,  // Dereference Arc to get &DynamicImage
                         &mut rich_state.resized_cache,
                         &url,
                     );
@@ -314,11 +318,12 @@ impl ArticleDetailWidget {
             return;
         };
 
-        // First pass: collect render info and clone images to avoid borrow conflicts
+        // First pass: collect render info and Arc-clone images to avoid borrow conflicts
         // (we need both image_cache for the image and resized_cache for caching)
+        // Using Arc<DynamicImage> instead of DynamicImage avoids ~24MB deep clone per image
         struct RenderItem {
             url: String,
-            image: image::DynamicImage,
+            image: Arc<DynamicImage>,
             render_area: Rect,
             is_focused: bool,
             image_area: Rect,
@@ -384,7 +389,7 @@ impl ArticleDetailWidget {
             if render_area.width > 0 && render_area.height > 0 {
                 render_items.push(RenderItem {
                     url: img_info.url.clone(),
-                    image: cached.image.clone(),
+                    image: Arc::clone(&cached.image),  // 8 bytes Arc clone vs ~24MB deep clone
                     render_area,
                     is_focused,
                     image_area,
@@ -403,10 +408,11 @@ impl ArticleDetailWidget {
             }
 
             // Use halfblock rendering with resize cache
+            // Dereference Arc to get &DynamicImage
             Self::render_halfblocks_at_position(
                 frame,
                 item.render_area,
-                &item.image,
+                &*item.image,
                 &mut rich_state.resized_cache,
                 &item.url,
             );

@@ -1,6 +1,7 @@
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
+// Arc is also used for DynamicImage sharing in image cache
 
 use anyhow::{anyhow, Result};
 use uuid::Uuid;
@@ -306,33 +307,34 @@ async fn handle_refresh_result(
     Ok(())
 }
 
-/// Spawn an async task to download an image
+/// Spawn an async task to load an image (from disk cache or download)
+/// Fully async - disk cache loading uses spawn_blocking to avoid blocking main thread
 fn spawn_image_load(
     url: String,
     tx: mpsc::UnboundedSender<ImageLoadResult>,
     data_dir: Option<PathBuf>,
     _cache: &kenseader_tui::rich_content::ArticleImageCache,
 ) {
-    // First, try disk cache synchronously
-    if let Some(ref dir) = data_dir {
-        let disk_cache = kenseader_tui::rich_content::ImageDiskCache::new(dir);
-        if let Ok(disk_cache) = disk_cache {
-            if let Some(img) = disk_cache.load(&url) {
-                let cache_path = Some(disk_cache.cache_path(&url));
-                let _ = tx.send(ImageLoadResult::Success {
-                    url,
-                    image: img,
-                    bytes: Vec::new(), // No need to re-save
-                    cache_path,
-                });
-                return;
-            }
-        }
-    }
-
-    // Spawn async download
+    // Spawn fully async task for both disk cache and network loading
     let data_dir_clone = data_dir.clone();
     tokio::spawn(async move {
+        // First, try disk cache asynchronously (uses spawn_blocking internally)
+        if let Some(ref dir) = data_dir_clone {
+            if let Ok(disk_cache) = kenseader_tui::rich_content::ImageDiskCache::new(dir) {
+                if let Some(img) = disk_cache.load_async(&url).await {
+                    let cache_path = Some(disk_cache.cache_path(&url));
+                    let _ = tx.send(ImageLoadResult::Success {
+                        url,
+                        image: img,
+                        bytes: Vec::new(), // No need to re-save
+                        cache_path,
+                    });
+                    return;
+                }
+            }
+        }
+
+        // Disk cache miss - download from network
         match download_image(&url).await {
             Ok((bytes, image)) => {
                 // Calculate cache path for external viewer
@@ -404,31 +406,33 @@ fn process_preload(
     }
 }
 
-/// Spawn an async task to download an image for preloading
+/// Spawn an async task to load an image for preloading (from disk cache or download)
+/// Fully async - disk cache loading uses spawn_blocking to avoid blocking main thread
 fn spawn_preload_image(
     url: String,
     tx: mpsc::UnboundedSender<ImageLoadResult>,
     data_dir: Option<PathBuf>,
 ) {
-    // First, try disk cache synchronously
-    if let Some(ref dir) = data_dir {
-        if let Ok(disk_cache) = kenseader_tui::rich_content::ImageDiskCache::new(dir) {
-            if let Some(img) = disk_cache.load(&url) {
-                let cache_path = Some(disk_cache.cache_path(&url));
-                let _ = tx.send(ImageLoadResult::Success {
-                    url,
-                    image: img,
-                    bytes: Vec::new(),
-                    cache_path,
-                });
-                return;
-            }
-        }
-    }
-
-    // Spawn async download
+    // Spawn fully async task for both disk cache and network loading
     let data_dir_clone = data_dir.clone();
     tokio::spawn(async move {
+        // First, try disk cache asynchronously (uses spawn_blocking internally)
+        if let Some(ref dir) = data_dir_clone {
+            if let Ok(disk_cache) = kenseader_tui::rich_content::ImageDiskCache::new(dir) {
+                if let Some(img) = disk_cache.load_async(&url).await {
+                    let cache_path = Some(disk_cache.cache_path(&url));
+                    let _ = tx.send(ImageLoadResult::Success {
+                        url,
+                        image: img,
+                        bytes: Vec::new(),
+                        cache_path,
+                    });
+                    return;
+                }
+            }
+        }
+
+        // Disk cache miss - download from network
         match download_image(&url).await {
             Ok((bytes, image)) => {
                 let cache_path = data_dir_clone.and_then(|dir| {
@@ -611,11 +615,12 @@ fn init_rich_article_state(app: &mut App, data_dir: Option<&PathBuf>) {
         };
 
         // Pre-fill images from preload cache (makes images appear instantly)
+        // Uses Arc::clone() for cheap reference counting instead of deep cloning
         for url in &rich_state.content.image_urls {
             if let Some(cached) = app.preload_cache.get(url) {
-                rich_state.image_cache.set_loaded(
+                rich_state.image_cache.set_loaded_arc(
                     url,
-                    cached.image.clone(),
+                    Arc::clone(&cached.image),
                     cached.cache_path.clone(),
                 );
             }
