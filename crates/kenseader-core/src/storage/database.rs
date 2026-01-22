@@ -31,14 +31,14 @@ impl Database {
         tracing::info!("Connecting to database: {}", db_path.display());
 
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(15)
             .acquire_timeout(Duration::from_secs(10))
             .connect(&db_url)
             .await?;
 
         // Configure SQLite PRAGMA for better concurrency with cloud sync scenarios
-        // busy_timeout: Wait up to 5 seconds when database is locked
-        sqlx::query("PRAGMA busy_timeout = 5000")
+        // busy_timeout: Wait up to 10 seconds when database is locked (increased for high-concurrency)
+        sqlx::query("PRAGMA busy_timeout = 10000")
             .execute(&pool)
             .await?;
 
@@ -54,9 +54,10 @@ impl Database {
             .execute(&pool)
             .await?;
 
-        // Set WAL auto-checkpoint to 1000 pages (~4MB)
+        // Set WAL auto-checkpoint to 2000 pages (~8MB)
         // This controls when WAL file is checkpointed back to main database
-        sqlx::query("PRAGMA wal_autocheckpoint = 1000")
+        // Higher value reduces checkpoint frequency, improving write performance under load
+        sqlx::query("PRAGMA wal_autocheckpoint = 2000")
             .execute(&pool)
             .await?;
 
