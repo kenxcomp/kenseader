@@ -4,6 +4,7 @@ pub mod image_renderer;
 pub mod input;
 pub mod keymap;
 pub mod rich_content;
+pub mod scroll;
 pub mod theme;
 pub mod themes;
 pub mod widgets;

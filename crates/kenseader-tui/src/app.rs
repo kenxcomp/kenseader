@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::image_renderer::ImageRenderer;
 use crate::rich_content::{ArticleImageCache, ContentElement, FocusableItem, PreloadCache, ResizedImageCache, RichContent};
+use crate::scroll::ScrollAnimator;
 use crate::theme::Theme;
 
 /// Rich content state for the current article
@@ -273,6 +274,8 @@ pub struct App {
     pub read_mode: bool,
     /// Current color theme
     pub theme: Theme,
+    /// Smooth scroll animator for article detail view
+    pub scroll_animator: ScrollAnimator,
 }
 
 /// Spinner animation frames (braille pattern)
@@ -291,6 +294,7 @@ impl App {
 
     /// Internal constructor with mode selection
     fn new_with_mode(client: Option<Arc<DaemonClient>>, config: Arc<AppConfig>, read_mode: bool, theme: Theme) -> Self {
+        let scroll_animator = ScrollAnimator::new(config.ui.scroll.clone());
         Self {
             client,
             config,
@@ -322,6 +326,7 @@ impl App {
             preload_cache: PreloadCache::new(None), // Initialized without disk cache, will be set later
             read_mode,
             theme,
+            scroll_animator,
         }
     }
 
@@ -803,5 +808,91 @@ impl App {
     /// Check if in visual mode for feeds
     pub fn is_visual_mode_feeds(&self) -> bool {
         self.visual_start_feed.is_some()
+    }
+
+    // ========== Smooth Scrolling Methods ==========
+
+    /// Update scroll animation and sync detail_scroll
+    /// Call this every frame when in ArticleDetail view
+    /// Returns true if animation is active (needs higher frame rate)
+    pub fn update_scroll_animation(&mut self) -> bool {
+        let max_scroll = self.max_detail_scroll();
+        let new_scroll = self.scroll_animator.update(max_scroll);
+        self.detail_scroll = new_scroll;
+        self.scroll_animator.is_animating()
+    }
+
+    /// Get maximum scroll value for article detail
+    pub fn max_detail_scroll(&self) -> u16 {
+        if let Some(ref rich_state) = self.rich_state {
+            rich_state.total_height.saturating_sub(self.viewport_height / 2)
+        } else {
+            0
+        }
+    }
+
+    /// Check if scroll animation is currently active
+    pub fn is_scroll_animating(&self) -> bool {
+        self.scroll_animator.is_animating()
+    }
+
+    /// Check if scroll needs high frame rate (animating or has pending work)
+    pub fn needs_scroll_update(&self) -> bool {
+        self.scroll_animator.needs_update()
+    }
+
+    /// Scroll article detail down by one line (smooth)
+    pub fn scroll_detail_down(&mut self) {
+        let max_scroll = self.max_detail_scroll();
+        self.scroll_animator.scroll_down(max_scroll);
+    }
+
+    /// Scroll article detail up by one line (smooth)
+    pub fn scroll_detail_up(&mut self) {
+        let max_scroll = self.max_detail_scroll();
+        self.scroll_animator.scroll_up(max_scroll);
+    }
+
+    /// Scroll article detail down by half page (smooth)
+    pub fn scroll_detail_half_page_down(&mut self) {
+        let max_scroll = self.max_detail_scroll();
+        self.scroll_animator.scroll_half_page_down(self.viewport_height, max_scroll);
+    }
+
+    /// Scroll article detail up by half page (smooth)
+    pub fn scroll_detail_half_page_up(&mut self) {
+        let max_scroll = self.max_detail_scroll();
+        self.scroll_animator.scroll_half_page_up(self.viewport_height, max_scroll);
+    }
+
+    /// Scroll article detail down by full page (smooth)
+    pub fn scroll_detail_full_page_down(&mut self) {
+        let max_scroll = self.max_detail_scroll();
+        self.scroll_animator.scroll_full_page_down(self.viewport_height, max_scroll);
+    }
+
+    /// Scroll article detail up by full page (smooth)
+    pub fn scroll_detail_full_page_up(&mut self) {
+        let max_scroll = self.max_detail_scroll();
+        self.scroll_animator.scroll_full_page_up(self.viewport_height, max_scroll);
+    }
+
+    /// Jump to top of article detail (instant)
+    pub fn scroll_detail_to_top(&mut self) {
+        self.scroll_animator.set_scroll(0);
+        self.detail_scroll = 0;
+    }
+
+    /// Jump to bottom of article detail (instant)
+    pub fn scroll_detail_to_bottom(&mut self) {
+        let max_scroll = self.max_detail_scroll();
+        self.scroll_animator.set_scroll(max_scroll);
+        self.detail_scroll = max_scroll;
+    }
+
+    /// Reset scroll animator when switching articles
+    pub fn reset_detail_scroll(&mut self) {
+        self.scroll_animator.reset();
+        self.detail_scroll = 0;
     }
 }

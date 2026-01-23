@@ -2,56 +2,10 @@ use chrono::{DateTime, Duration, Utc};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use super::retry::{execute_with_retry, query_with_retry};
 use super::Database;
 use crate::feed::{Article, NewArticle};
 use crate::Result;
-
-/// Maximum number of retry attempts for write operations
-const MAX_RETRIES: u32 = 5;
-
-/// Check if a SQLite error is a busy or locked error that should be retried
-fn is_busy_or_locked(err: &sqlx::Error) -> bool {
-    match err {
-        sqlx::Error::Database(db_err) => {
-            // SQLite error codes:
-            // 5 = SQLITE_BUSY - database is locked by another connection
-            // 6 = SQLITE_LOCKED - database table is locked
-            // 1032 = SQLITE_BUSY_SNAPSHOT - busy due to WAL snapshot
-            let code = db_err.code().map(|c| c.to_string());
-            matches!(code.as_deref(), Some("5") | Some("6") | Some("1032"))
-        }
-        _ => false,
-    }
-}
-
-/// Execute a write operation with exponential backoff retry for busy/locked errors
-///
-/// This is essential for cloud sync scenarios where multiple devices may
-/// access the same database file (via iCloud, Dropbox, etc.)
-async fn execute_with_retry<F, Fut>(operation: F) -> std::result::Result<(), sqlx::Error>
-where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = std::result::Result<(), sqlx::Error>>,
-{
-    let mut attempts = 0;
-    loop {
-        match operation().await {
-            Ok(_) => return Ok(()),
-            Err(e) if is_busy_or_locked(&e) && attempts < MAX_RETRIES => {
-                attempts += 1;
-                let delay_ms = 100 * 2u64.pow(attempts);
-                tracing::debug!(
-                    "Database busy, retrying in {}ms (attempt {}/{})",
-                    delay_ms,
-                    attempts,
-                    MAX_RETRIES
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-}
 
 /// Repository for article CRUD operations
 pub struct ArticleRepository<'a> {
@@ -115,58 +69,111 @@ impl<'a> ArticleRepository<'a> {
     pub async fn create(&self, new_article: &NewArticle) -> Result<Option<Article>> {
         let id = Uuid::new_v4();
         let now = Utc::now();
+        let pool = self.db.pool().clone();
+        let id_str = id.to_string();
+        let feed_id_str = new_article.feed_id.to_string();
+        let guid = new_article.guid.clone();
+        let url = new_article.url.clone();
+        let title = new_article.title.clone();
+        let author = new_article.author.clone();
+        let content = new_article.content.clone();
+        let content_text = new_article.content_text.clone();
+        let published_at = new_article.published_at;
+        let image_url = new_article.image_url.clone();
 
         // Try to insert, ignore if duplicate (feed_id, guid)
-        let result = sqlx::query(
-            r#"
-            INSERT OR IGNORE INTO articles
-            (id, feed_id, guid, url, title, author, content, content_text, published_at, fetched_at, created_at, image_url)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(id.to_string())
-        .bind(new_article.feed_id.to_string())
-        .bind(&new_article.guid)
-        .bind(&new_article.url)
-        .bind(&new_article.title)
-        .bind(&new_article.author)
-        .bind(&new_article.content)
-        .bind(&new_article.content_text)
-        .bind(new_article.published_at)
-        .bind(now)
-        .bind(now)
-        .bind(&new_article.image_url)
-        .execute(self.db.pool())
+        // Use query_with_retry to get the result for checking rows_affected
+        let result = query_with_retry(|| {
+            let pool = pool.clone();
+            let id_str = id_str.clone();
+            let feed_id_str = feed_id_str.clone();
+            let guid = guid.clone();
+            let url = url.clone();
+            let title = title.clone();
+            let author = author.clone();
+            let content = content.clone();
+            let content_text = content_text.clone();
+            let image_url = image_url.clone();
+            async move {
+                sqlx::query(
+                    r#"
+                    INSERT OR IGNORE INTO articles
+                    (id, feed_id, guid, url, title, author, content, content_text, published_at, fetched_at, created_at, image_url)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    "#,
+                )
+                .bind(&id_str)
+                .bind(&feed_id_str)
+                .bind(&guid)
+                .bind(&url)
+                .bind(&title)
+                .bind(&author)
+                .bind(&content)
+                .bind(&content_text)
+                .bind(published_at)
+                .bind(now)
+                .bind(now)
+                .bind(&image_url)
+                .execute(&pool)
+                .await
+            }
+        })
         .await?;
 
         if result.rows_affected() > 0 {
             self.find_by_id(id).await
         } else {
-            sqlx::query(
-                r#"
-                UPDATE articles
-                SET url = COALESCE(?, url),
-                    title = ?,
-                    author = COALESCE(?, author),
-                    content = COALESCE(?, content),
-                    content_text = COALESCE(?, content_text),
-                    published_at = COALESCE(?, published_at),
-                    fetched_at = ?,
-                    image_url = COALESCE(?, image_url)
-                WHERE feed_id = ? AND guid = ?
-                "#,
-            )
-            .bind(&new_article.url)
-            .bind(&new_article.title)
-            .bind(&new_article.author)
-            .bind(&new_article.content)
-            .bind(&new_article.content_text)
-            .bind(new_article.published_at)
-            .bind(now)
-            .bind(&new_article.image_url)
-            .bind(new_article.feed_id.to_string())
-            .bind(&new_article.guid)
-            .execute(self.db.pool())
+            // Update existing article with retry protection
+            let pool = self.db.pool().clone();
+            let url = new_article.url.clone();
+            let title = new_article.title.clone();
+            let author = new_article.author.clone();
+            let content = new_article.content.clone();
+            let content_text = new_article.content_text.clone();
+            let image_url = new_article.image_url.clone();
+            let feed_id_str = new_article.feed_id.to_string();
+            let guid = new_article.guid.clone();
+
+            execute_with_retry(|| {
+                let pool = pool.clone();
+                let url = url.clone();
+                let title = title.clone();
+                let author = author.clone();
+                let content = content.clone();
+                let content_text = content_text.clone();
+                let image_url = image_url.clone();
+                let feed_id_str = feed_id_str.clone();
+                let guid = guid.clone();
+                async move {
+                    sqlx::query(
+                        r#"
+                        UPDATE articles
+                        SET url = COALESCE(?, url),
+                            title = ?,
+                            author = COALESCE(?, author),
+                            content = COALESCE(?, content),
+                            content_text = COALESCE(?, content_text),
+                            published_at = COALESCE(?, published_at),
+                            fetched_at = ?,
+                            image_url = COALESCE(?, image_url)
+                        WHERE feed_id = ? AND guid = ?
+                        "#,
+                    )
+                    .bind(&url)
+                    .bind(&title)
+                    .bind(&author)
+                    .bind(&content)
+                    .bind(&content_text)
+                    .bind(published_at)
+                    .bind(now)
+                    .bind(&image_url)
+                    .bind(&feed_id_str)
+                    .bind(&guid)
+                    .execute(&pool)
+                    .await
+                    .map(|_| ())
+                }
+            })
             .await?;
 
             // Article already exists
@@ -189,17 +196,27 @@ impl<'a> ArticleRepository<'a> {
 
     /// Find an article by ID
     pub async fn find_by_id(&self, id: Uuid) -> Result<Option<Article>> {
-        let row: Option<ArticleRow> = sqlx::query_as(
-            r#"
-            SELECT id, feed_id, guid, url, title, author, content, content_text,
-                   summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at, image_url, relevance_score
-            FROM articles
-            WHERE id = ?
-            "#,
-        )
-        .bind(id.to_string())
-        .fetch_optional(self.db.pool())
+        let pool = self.db.pool().clone();
+        let id_str = id.to_string();
+
+        let row: Option<ArticleRow> = query_with_retry(|| {
+            let pool = pool.clone();
+            let id_str = id_str.clone();
+            async move {
+                sqlx::query_as(
+                    r#"
+                    SELECT id, feed_id, guid, url, title, author, content, content_text,
+                           summary, summary_generated_at, published_at, fetched_at,
+                           is_read, read_at, is_saved, created_at, image_url, relevance_score
+                    FROM articles
+                    WHERE id = ?
+                    "#,
+                )
+                .bind(&id_str)
+                .fetch_optional(&pool)
+                .await
+            }
+        })
         .await?;
 
         match row {
@@ -234,10 +251,21 @@ impl<'a> ArticleRepository<'a> {
             "#
         };
 
-        let rows: Vec<ArticleRow> = sqlx::query_as(query)
-            .bind(feed_id.to_string())
-            .fetch_all(self.db.pool())
-            .await?;
+        let pool = self.db.pool().clone();
+        let feed_id_str = feed_id.to_string();
+
+        let rows: Vec<ArticleRow> = query_with_retry(|| {
+            let pool = pool.clone();
+            let feed_id_str = feed_id_str.clone();
+            let query = query;
+            async move {
+                sqlx::query_as(query)
+                    .bind(&feed_id_str)
+                    .fetch_all(&pool)
+                    .await
+            }
+        })
+        .await?;
 
         Ok(rows.into_iter().map(Article::from).collect())
     }
@@ -481,42 +509,46 @@ impl<'a> ArticleRepository<'a> {
         Ok(())
     }
 
-    /// Add tags to an article
+    /// Add tags to an article (batch INSERT for efficiency)
     pub async fn add_tags(&self, article_id: Uuid, tags: &[String], source: &str) -> Result<()> {
+        if tags.is_empty() {
+            return Ok(());
+        }
+
         let now = Utc::now();
         let pool = self.db.pool().clone();
         let article_id_str = article_id.to_string();
         let source = source.to_string();
+        let tags: Vec<String> = tags.to_vec();
 
-        for tag in tags {
+        // Build batch INSERT query for all tags at once
+        // This reduces database round trips from N to 1
+        execute_with_retry(|| {
             let pool = pool.clone();
             let article_id_str = article_id_str.clone();
             let source = source.clone();
-            let tag = tag.clone();
+            let tags = tags.clone();
+            async move {
+                // Build placeholders: (?, ?, ?, ?), (?, ?, ?, ?), ...
+                let placeholders: Vec<String> = tags.iter().map(|_| "(?, ?, ?, ?)".to_string()).collect();
+                let query = format!(
+                    "INSERT OR IGNORE INTO article_tags (article_id, tag, source, created_at) VALUES {}",
+                    placeholders.join(", ")
+                );
 
-            execute_with_retry(|| {
-                let pool = pool.clone();
-                let article_id_str = article_id_str.clone();
-                let source = source.clone();
-                let tag = tag.clone();
-                async move {
-                    sqlx::query(
-                        r#"
-                        INSERT OR IGNORE INTO article_tags (article_id, tag, source, created_at)
-                        VALUES (?, ?, ?, ?)
-                        "#,
-                    )
-                    .bind(&article_id_str)
-                    .bind(&tag)
-                    .bind(&source)
-                    .bind(now)
-                    .execute(&pool)
-                    .await
-                    .map(|_| ())
+                let mut query_builder = sqlx::query(&query);
+                for tag in &tags {
+                    query_builder = query_builder
+                        .bind(&article_id_str)
+                        .bind(tag)
+                        .bind(&source)
+                        .bind(now);
                 }
-            })
-            .await?;
-        }
+
+                query_builder.execute(&pool).await.map(|_| ())
+            }
+        })
+        .await?;
 
         Ok(())
     }
@@ -536,15 +568,23 @@ impl<'a> ArticleRepository<'a> {
     /// Delete articles older than specified days (except saved ones)
     pub async fn cleanup_old_articles(&self, retention_days: u32) -> Result<u32> {
         let cutoff = Utc::now() - Duration::days(retention_days as i64);
+        let pool = self.db.pool().clone();
 
-        let result = sqlx::query(
-            r#"
-            DELETE FROM articles
-            WHERE fetched_at < ? AND is_saved = 0
-            "#,
-        )
-        .bind(cutoff)
-        .execute(self.db.pool())
+        // Use query_with_retry to get the result for checking rows_affected
+        let result = query_with_retry(|| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query(
+                    r#"
+                    DELETE FROM articles
+                    WHERE fetched_at < ? AND is_saved = 0
+                    "#,
+                )
+                .bind(cutoff)
+                .execute(&pool)
+                .await
+            }
+        })
         .await?;
 
         Ok(result.rows_affected() as u32)

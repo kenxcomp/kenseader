@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use regex::Regex;
@@ -32,8 +32,8 @@ pub fn supports_graphics_protocol() -> bool {
 
 /// A cached image with its data and render state
 pub struct CachedImageData {
-    /// The raw image data
-    pub image: DynamicImage,
+    /// The raw image data (wrapped in Arc to avoid expensive deep clones)
+    pub image: Arc<DynamicImage>,
     /// The stateful protocol for StatefulImage rendering
     pub protocol: Option<StatefulProtocol>,
     /// Disk cache path for external viewer fallback
@@ -42,6 +42,15 @@ pub struct CachedImageData {
 
 impl CachedImageData {
     pub fn new(image: DynamicImage, cache_path: Option<PathBuf>) -> Self {
+        Self {
+            image: Arc::new(image),
+            protocol: None,
+            cache_path,
+        }
+    }
+
+    /// Create from an already-Arc'd image (avoids double-wrapping)
+    pub fn new_arc(image: Arc<DynamicImage>, cache_path: Option<PathBuf>) -> Self {
         Self {
             image,
             protocol: None,
@@ -56,7 +65,9 @@ impl CachedImageData {
             // Create a new picker for this protocol (new_resize_protocol requires &mut self)
             let mut picker = Picker::from_query_stdio()
                 .unwrap_or_else(|_| Picker::from_fontsize((8, 16)));
-            self.protocol = Some(picker.new_resize_protocol(self.image.clone()));
+            // Note: new_resize_protocol needs owned DynamicImage, but this is only called
+            // for protocol initialization which is relatively rare
+            self.protocol = Some(picker.new_resize_protocol((*self.image).clone()));
         }
     }
 
@@ -126,7 +137,7 @@ impl ImageDiskCache {
         self.cache_path(url).exists()
     }
 
-    /// Load image from disk cache
+    /// Load image from disk cache (synchronous)
     pub fn load(&self, url: &str) -> Option<DynamicImage> {
         let path = self.cache_path(url);
         if path.exists() {
@@ -134,6 +145,26 @@ impl ImageDiskCache {
         } else {
             None
         }
+    }
+
+    /// Load image from disk cache asynchronously
+    /// Uses spawn_blocking to avoid blocking the async runtime during I/O and decoding
+    pub async fn load_async(&self, url: &str) -> Option<DynamicImage> {
+        let path = self.cache_path(url);
+        if !path.exists() {
+            return None;
+        }
+        Self::load_async_from_path(&path).await
+    }
+
+    /// Load image from a specific path asynchronously (static method)
+    /// Uses spawn_blocking to avoid blocking the async runtime during I/O and decoding
+    pub async fn load_async_from_path(path: &PathBuf) -> Option<DynamicImage> {
+        let path = path.clone();
+        tokio::task::spawn_blocking(move || image::open(&path).ok())
+            .await
+            .ok()
+            .flatten()
     }
 
     /// Save image to disk cache
@@ -753,6 +784,13 @@ impl ArticleImageCache {
             .insert(url.to_string(), ImageState::Loaded(cached));
     }
 
+    /// Set image as loaded from an Arc (avoids unnecessary cloning)
+    pub fn set_loaded_arc(&mut self, url: &str, image: Arc<DynamicImage>, cache_path: Option<PathBuf>) {
+        let cached = CachedImageData::new_arc(image, cache_path);
+        self.images
+            .insert(url.to_string(), ImageState::Loaded(cached));
+    }
+
     /// Set image as failed
     pub fn set_failed(&mut self, url: &str, error: String) {
         self.images.insert(url.to_string(), ImageState::Failed(error));
@@ -826,8 +864,8 @@ pub struct ResizedImageCache {
 }
 
 impl ResizedImageCache {
-    /// Maximum number of cached resized images
-    const MAX_ENTRIES: usize = 50;
+    /// Maximum number of cached resized images (increased from 50 for better scroll performance)
+    const MAX_ENTRIES: usize = 100;
     /// Width quantization bucket size (columns)
     const WIDTH_BUCKET_SIZE: u16 = 8;
     /// Height quantization bucket size (rows)
@@ -939,11 +977,19 @@ impl Default for ResizedImageCache {
     }
 }
 
+/// Decode image bytes asynchronously using spawn_blocking to avoid blocking the async runtime
+pub async fn decode_image_bytes_async(bytes: Vec<u8>) -> Result<DynamicImage, String> {
+    tokio::task::spawn_blocking(move || decode_image_bytes(&bytes))
+        .await
+        .map_err(|e| format!("Task failed: {}", e))?
+}
+
 /// Download image and decode it
 pub async fn download_image(url: &str) -> Result<(Vec<u8>, DynamicImage), String> {
     parse_http_url(url)?;
     let bytes = download_image_bytes(url).await?;
-    let image = decode_image_bytes(&bytes)?;
+    // Use async decoding to avoid blocking the main thread
+    let image = decode_image_bytes_async(bytes.clone()).await?;
     Ok((bytes, image))
 }
 
@@ -1127,6 +1173,13 @@ impl PreloadCache {
     /// Set image as loaded with optional cache path
     pub fn set_loaded(&mut self, url: &str, image: DynamicImage, cache_path: Option<PathBuf>) {
         let cached = CachedImageData::new(image, cache_path);
+        self.images
+            .insert(url.to_string(), ImageState::Loaded(cached));
+    }
+
+    /// Set image as loaded from an Arc (avoids unnecessary cloning)
+    pub fn set_loaded_arc(&mut self, url: &str, image: Arc<DynamicImage>, cache_path: Option<PathBuf>) {
+        let cached = CachedImageData::new_arc(image, cache_path);
         self.images
             .insert(url.to_string(), ImageState::Loaded(cached));
     }

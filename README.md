@@ -34,6 +34,7 @@ kenseader run
 - 📚 **Reading History** - Navigate history with `u` (back) and `Ctrl+r` (forward)
 - 🔄 **Background Scheduler** - Auto-refresh, cleanup, and AI processing
 - 💾 **SQLite Storage** - Fast, local database for feeds and articles
+- ✨ **Smooth Scrolling** - nvim-like smooth scroll animations with configurable easing
 
 ## Screenshots
 
@@ -180,6 +181,11 @@ summary_language = "English"
 
 [ui]
 image_preview = true
+
+[ui.scroll]
+smooth_enabled = true        # Enable smooth scrolling (default: true)
+animation_duration_ms = 150  # Animation duration in milliseconds
+easing = "cubic"             # Easing: none, linear, cubic, quintic, easeout
 
 [sync]
 refresh_interval_secs = 3600

@@ -7,7 +7,10 @@ use image::DynamicImage;
 
 /// Event handler for terminal events
 pub struct EventHandler {
+    /// Default tick rate (used when idle)
     tick_rate: Duration,
+    /// Fast tick rate (used during animations)
+    animation_tick_rate: Duration,
 }
 
 /// Result of an async image load operation
@@ -40,15 +43,36 @@ pub enum RefreshResult {
 }
 
 impl EventHandler {
+    /// Create a new event handler with default and animation tick rates
     pub fn new(tick_rate_ms: u64) -> Self {
         Self {
             tick_rate: Duration::from_millis(tick_rate_ms),
+            animation_tick_rate: Duration::from_millis(16), // ~60 FPS for animations
         }
     }
 
-    /// Poll for the next event
+    /// Create with custom animation FPS
+    pub fn with_animation_fps(tick_rate_ms: u64, animation_fps: u32) -> Self {
+        let animation_tick_ms = if animation_fps == 0 { 16 } else { 1000 / animation_fps as u64 };
+        Self {
+            tick_rate: Duration::from_millis(tick_rate_ms),
+            animation_tick_rate: Duration::from_millis(animation_tick_ms),
+        }
+    }
+
+    /// Poll for the next event with default tick rate
     pub fn next(&self) -> Result<Option<AppEvent>> {
-        if event::poll(self.tick_rate)? {
+        self.next_with_rate(self.tick_rate)
+    }
+
+    /// Poll for the next event with animation tick rate (higher FPS)
+    pub fn next_animation(&self) -> Result<Option<AppEvent>> {
+        self.next_with_rate(self.animation_tick_rate)
+    }
+
+    /// Poll for the next event with custom tick rate
+    fn next_with_rate(&self, tick_rate: Duration) -> Result<Option<AppEvent>> {
+        if event::poll(tick_rate)? {
             match event::read()? {
                 Event::Key(key) => {
                     // Only handle key press events, ignore release events

@@ -234,11 +234,13 @@ impl KittyRenderer {
         let actual_rows = ((new_pixel_height + cell_height - 1) / cell_height) as u16;
 
         // Resize image preserving aspect ratio using Cow to avoid unnecessary clones
+        // Use Triangle filter (bilinear) for fast realtime encoding - much faster than Lanczos3
+        // while still providing good quality for terminal display
         let to_encode: Cow<DynamicImage> = if scale < 1.0 {
             Cow::Owned(img.resize(
                 new_pixel_width,
                 new_pixel_height,
-                image::imageops::FilterType::Lanczos3,
+                image::imageops::FilterType::Triangle,
             ))
         } else {
             // No resize needed - borrow instead of clone

@@ -1,6 +1,7 @@
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
+// Arc is also used for DynamicImage sharing in image cache
 
 use anyhow::{anyhow, Result};
 use uuid::Uuid;
@@ -86,8 +87,11 @@ pub async fn run(config: Arc<AppConfig>, read_mode: bool) -> Result<()> {
     // Load initial data
     load_feeds(&mut app, db.as_ref()).await?;
 
-    // Create event handler
-    let event_handler = EventHandler::new(config.ui.tick_rate_ms);
+    // Create event handler with animation FPS support
+    let event_handler = EventHandler::with_animation_fps(
+        config.ui.tick_rate_ms,
+        config.ui.scroll.animation_fps,
+    );
 
     // Get data directory for disk cache (use configured data_dir)
     let data_dir = Some(config.data_dir());
@@ -103,6 +107,10 @@ pub async fn run(config: Arc<AppConfig>, read_mode: bool) -> Result<()> {
 
     // Create channel for async refresh results
     let (refresh_tx, mut refresh_rx) = mpsc::unbounded_channel::<RefreshResult>();
+
+    // Track if we need high frame rate for smooth scrolling
+    // This is checked at the END of each iteration to determine NEXT iteration's tick rate
+    let mut needs_fast_update = false;
 
     // Main loop
     loop {
@@ -133,6 +141,11 @@ pub async fn run(config: Arc<AppConfig>, read_mode: bool) -> Result<()> {
                 // Spawn async download task
                 spawn_image_load(url, img_tx.clone(), data_dir.clone(), &rich_state.image_cache);
             }
+        }
+
+        // Update scroll animation (when in ArticleDetail)
+        if app.focus == Focus::ArticleDetail {
+            app.update_scroll_animation();
         }
 
         // Draw UI
@@ -186,8 +199,13 @@ pub async fn run(config: Arc<AppConfig>, read_mode: bool) -> Result<()> {
             }
         })?;
 
-        // Handle events
-        if let Some(event) = event_handler.next()? {
+        // Handle events (use faster tick rate during animations or when pending scroll)
+        let event = if needs_fast_update {
+            event_handler.next_animation()?
+        } else {
+            event_handler.next()?
+        };
+        if let Some(event) = event {
             match event {
                 AppEvent::Key(key) => {
                     let action = handle_key_event(key, &app, &keymap);
@@ -205,6 +223,10 @@ pub async fn run(config: Arc<AppConfig>, read_mode: bool) -> Result<()> {
                 }
             }
         }
+
+        // Update fast update flag for next iteration
+        // This ensures we use high frame rate immediately after a scroll action
+        needs_fast_update = app.focus == Focus::ArticleDetail && app.needs_scroll_update();
 
         if app.should_quit {
             break;
@@ -285,36 +307,50 @@ async fn handle_refresh_result(
     Ok(())
 }
 
-/// Spawn an async task to download an image
+/// Spawn an async task to load an image (from disk cache or download)
+/// Disk cache check is synchronous for fast cache hits; only decoding/download is async
 fn spawn_image_load(
     url: String,
     tx: mpsc::UnboundedSender<ImageLoadResult>,
     data_dir: Option<PathBuf>,
     _cache: &kenseader_tui::rich_content::ArticleImageCache,
 ) {
-    // First, try disk cache synchronously
+    // First, check if image exists in disk cache (fast synchronous check)
     if let Some(ref dir) = data_dir {
-        let disk_cache = kenseader_tui::rich_content::ImageDiskCache::new(dir);
-        if let Ok(disk_cache) = disk_cache {
-            if let Some(img) = disk_cache.load(&url) {
-                let cache_path = Some(disk_cache.cache_path(&url));
-                let _ = tx.send(ImageLoadResult::Success {
-                    url,
-                    image: img,
-                    bytes: Vec::new(), // No need to re-save
-                    cache_path,
+        if let Ok(disk_cache) = kenseader_tui::rich_content::ImageDiskCache::new(dir) {
+            if disk_cache.is_cached(&url) {
+                // Cache hit - spawn async task just for decoding (CPU-bound)
+                let cache_path = disk_cache.cache_path(&url);
+                let tx_clone = tx.clone();
+                let url_clone = url.clone();
+                tokio::spawn(async move {
+                    match kenseader_tui::rich_content::ImageDiskCache::load_async_from_path(&cache_path).await {
+                        Some(img) => {
+                            let _ = tx_clone.send(ImageLoadResult::Success {
+                                url: url_clone,
+                                image: img,
+                                bytes: Vec::new(),
+                                cache_path: Some(cache_path),
+                            });
+                        }
+                        None => {
+                            let _ = tx_clone.send(ImageLoadResult::Failure {
+                                url: url_clone,
+                                error: "Failed to decode cached image".to_string(),
+                            });
+                        }
+                    }
                 });
                 return;
             }
         }
     }
 
-    // Spawn async download
+    // Cache miss - spawn async task for network download
     let data_dir_clone = data_dir.clone();
     tokio::spawn(async move {
         match download_image(&url).await {
             Ok((bytes, image)) => {
-                // Calculate cache path for external viewer
                 let cache_path = data_dir_clone.and_then(|dir| {
                     kenseader_tui::rich_content::ImageDiskCache::new(&dir)
                         .ok()
@@ -383,29 +419,45 @@ fn process_preload(
     }
 }
 
-/// Spawn an async task to download an image for preloading
+/// Spawn an async task to load an image for preloading (from disk cache or download)
+/// Disk cache check is synchronous for fast cache hits; only decoding/download is async
 fn spawn_preload_image(
     url: String,
     tx: mpsc::UnboundedSender<ImageLoadResult>,
     data_dir: Option<PathBuf>,
 ) {
-    // First, try disk cache synchronously
+    // First, check if image exists in disk cache (fast synchronous check)
     if let Some(ref dir) = data_dir {
         if let Ok(disk_cache) = kenseader_tui::rich_content::ImageDiskCache::new(dir) {
-            if let Some(img) = disk_cache.load(&url) {
-                let cache_path = Some(disk_cache.cache_path(&url));
-                let _ = tx.send(ImageLoadResult::Success {
-                    url,
-                    image: img,
-                    bytes: Vec::new(),
-                    cache_path,
+            if disk_cache.is_cached(&url) {
+                // Cache hit - spawn async task just for decoding (CPU-bound)
+                let cache_path = disk_cache.cache_path(&url);
+                let tx_clone = tx.clone();
+                let url_clone = url.clone();
+                tokio::spawn(async move {
+                    match kenseader_tui::rich_content::ImageDiskCache::load_async_from_path(&cache_path).await {
+                        Some(img) => {
+                            let _ = tx_clone.send(ImageLoadResult::Success {
+                                url: url_clone,
+                                image: img,
+                                bytes: Vec::new(),
+                                cache_path: Some(cache_path),
+                            });
+                        }
+                        None => {
+                            let _ = tx_clone.send(ImageLoadResult::Failure {
+                                url: url_clone,
+                                error: "Failed to decode cached image".to_string(),
+                            });
+                        }
+                    }
                 });
                 return;
             }
         }
     }
 
-    // Spawn async download
+    // Cache miss - spawn async task for network download
     let data_dir_clone = data_dir.clone();
     tokio::spawn(async move {
         match download_image(&url).await {
@@ -506,7 +558,7 @@ async fn load_articles_preserve_selection(app: &mut App, db: Option<&Arc<Databas
             app.selected_article = prev_selected;
         } else {
             app.selected_article = 0;
-            app.detail_scroll = 0;
+            app.reset_detail_scroll();
         }
 
         // Always clear rich state when articles change - it will be re-initialized on demand
@@ -537,7 +589,7 @@ async fn load_articles_for_history(app: &mut App, db: Option<&Arc<Database>>, ta
 
     if let Some(idx) = app.find_article_index(target_article_id) {
         app.selected_article = idx;
-        app.detail_scroll = 0;
+        app.reset_detail_scroll();
         app.clear_rich_state();
         return Ok(true);
     }
@@ -554,7 +606,7 @@ async fn load_articles_for_history(app: &mut App, db: Option<&Arc<Database>>, ta
 
         if let Some(idx) = app.find_article_index(target_article_id) {
             app.selected_article = idx;
-            app.detail_scroll = 0;
+            app.reset_detail_scroll();
             app.clear_rich_state();
             // Temporarily switch to All mode to show the article
             app.view_mode = ViewMode::All;
@@ -590,11 +642,12 @@ fn init_rich_article_state(app: &mut App, data_dir: Option<&PathBuf>) {
         };
 
         // Pre-fill images from preload cache (makes images appear instantly)
+        // Uses Arc::clone() for cheap reference counting instead of deep cloning
         for url in &rich_state.content.image_urls {
             if let Some(cached) = app.preload_cache.get(url) {
-                rich_state.image_cache.set_loaded(
+                rich_state.image_cache.set_loaded_arc(
                     url,
-                    cached.image.clone(),
+                    Arc::clone(&cached.image),
                     cached.cache_path.clone(),
                 );
             }
@@ -681,7 +734,7 @@ async fn handle_action(
                 // Record history before entering article
                 app.push_history();
                 // Reset scroll to top (like vim 'gg')
-                app.detail_scroll = 0;
+                app.reset_detail_scroll();
                 if let Some(article) = app.current_article() {
                     if !article.is_read {
                         let article_id = article.id;
@@ -719,16 +772,13 @@ async fn handle_action(
                 }
                 // Update visual selection if in visual mode
                 app.update_visual_selection_feeds();
+            } else if app.focus == Focus::ArticleDetail {
+                // Use smooth scrolling for article detail
+                app.scroll_detail_up();
             } else {
-                // Record history before switching articles in ArticleDetail
-                if app.focus == Focus::ArticleDetail && app.selected_article > 0 {
-                    app.push_history();
-                }
                 app.move_up();
                 // Update visual selection if in visual mode (for ArticleList)
-                if matches!(app.focus, Focus::ArticleList | Focus::ArticleDetail) {
-                    app.update_visual_selection_articles();
-                }
+                app.update_visual_selection_articles();
             }
 
             if app.focus == Focus::Subscriptions && prev_feed != app.selected_feed {
@@ -740,27 +790,8 @@ async fn handle_action(
             }
             // Re-initialize rich state when article changes to ensure consistent rendering
             if app.focus == Focus::ArticleList && prev_article != app.selected_article {
-                app.detail_scroll = 0; // Reset scroll to top
+                app.reset_detail_scroll();
                 app.clear_rich_state();
-                init_rich_article_state(app, data_dir);
-            }
-            // Handle article change in ArticleDetail (with auto mark-read)
-            if app.focus == Focus::ArticleDetail && prev_article != app.selected_article {
-                app.detail_scroll = 0;
-                app.clear_rich_state();
-                // Auto mark-read
-                if let Some(article) = app.current_article() {
-                    if !article.is_read {
-                        let article_id = article.id;
-                        mark_article_read(app, client, db, article_id).await?;
-                        if let Some(article) = app.current_article_mut() {
-                            article.is_read = true;
-                        }
-                        if let Some(feed) = app.current_feed_mut() {
-                            feed.unread_count = feed.unread_count.saturating_sub(1);
-                        }
-                    }
-                }
                 init_rich_article_state(app, data_dir);
             }
         }
@@ -782,16 +813,13 @@ async fn handle_action(
                 }
                 // Update visual selection if in visual mode
                 app.update_visual_selection_feeds();
+            } else if app.focus == Focus::ArticleDetail {
+                // Use smooth scrolling for article detail
+                app.scroll_detail_down();
             } else {
-                // Record history before switching articles in ArticleDetail
-                if app.focus == Focus::ArticleDetail && app.selected_article < app.articles.len().saturating_sub(1) {
-                    app.push_history();
-                }
                 app.move_down();
                 // Update visual selection if in visual mode (for ArticleList)
-                if matches!(app.focus, Focus::ArticleList | Focus::ArticleDetail) {
-                    app.update_visual_selection_articles();
-                }
+                app.update_visual_selection_articles();
             }
 
             if app.focus == Focus::Subscriptions && prev_feed != app.selected_feed {
@@ -803,27 +831,8 @@ async fn handle_action(
             }
             // Re-initialize rich state when article changes to ensure consistent rendering
             if app.focus == Focus::ArticleList && prev_article != app.selected_article {
-                app.detail_scroll = 0; // Reset scroll to top
+                app.reset_detail_scroll();
                 app.clear_rich_state();
-                init_rich_article_state(app, data_dir);
-            }
-            // Handle article change in ArticleDetail (with auto mark-read)
-            if app.focus == Focus::ArticleDetail && prev_article != app.selected_article {
-                app.detail_scroll = 0;
-                app.clear_rich_state();
-                // Auto mark-read
-                if let Some(article) = app.current_article() {
-                    if !article.is_read {
-                        let article_id = article.id;
-                        mark_article_read(app, client, db, article_id).await?;
-                        if let Some(article) = app.current_article_mut() {
-                            article.is_read = true;
-                        }
-                        if let Some(feed) = app.current_feed_mut() {
-                            feed.unread_count = feed.unread_count.saturating_sub(1);
-                        }
-                    }
-                }
                 init_rich_article_state(app, data_dir);
             }
         }
@@ -849,7 +858,7 @@ async fn handle_action(
             if let Some(idx) = next_idx {
                 app.push_history();
                 app.selected_article = idx;
-                app.detail_scroll = 0;
+                app.reset_detail_scroll();
                 app.clear_rich_state();
 
                 // Auto mark-read
@@ -891,7 +900,7 @@ async fn handle_action(
             if let Some(idx) = prev_idx {
                 app.push_history();
                 app.selected_article = idx;
-                app.detail_scroll = 0;
+                app.reset_detail_scroll();
                 app.clear_rich_state();
 
                 // Auto mark-read
@@ -912,124 +921,112 @@ async fn handle_action(
             // If None (no valid prev article), stay on current - do nothing
         }
         Action::ScrollHalfPageDown => {
-            app.scroll_half_page_down();
-            // Update visual selection if in visual mode
-            match app.focus {
-                Focus::ArticleList | Focus::ArticleDetail => {
-                    app.update_visual_selection_articles();
-                }
-                Focus::Subscriptions => {
-                    app.update_visual_selection_feeds();
+            // Use smooth scrolling for ArticleDetail, original behavior for others
+            if app.focus == Focus::ArticleDetail {
+                app.scroll_detail_half_page_down();
+            } else {
+                app.scroll_half_page_down();
+                // Update visual selection if in visual mode
+                match app.focus {
+                    Focus::ArticleList => {
+                        app.update_visual_selection_articles();
+                    }
+                    Focus::Subscriptions => {
+                        app.update_visual_selection_feeds();
+                    }
+                    _ => {}
                 }
             }
         }
         Action::ScrollHalfPageUp => {
-            app.scroll_half_page_up();
-            // Update visual selection if in visual mode
-            match app.focus {
-                Focus::ArticleList | Focus::ArticleDetail => {
-                    app.update_visual_selection_articles();
-                }
-                Focus::Subscriptions => {
-                    app.update_visual_selection_feeds();
+            // Use smooth scrolling for ArticleDetail, original behavior for others
+            if app.focus == Focus::ArticleDetail {
+                app.scroll_detail_half_page_up();
+            } else {
+                app.scroll_half_page_up();
+                // Update visual selection if in visual mode
+                match app.focus {
+                    Focus::ArticleList => {
+                        app.update_visual_selection_articles();
+                    }
+                    Focus::Subscriptions => {
+                        app.update_visual_selection_feeds();
+                    }
+                    _ => {}
                 }
             }
         }
         Action::ScrollPageDown => {
-            // Full page scroll using viewport height
-            app.scroll_full_page_down();
-            // Update visual selection if in visual mode
-            match app.focus {
-                Focus::ArticleList | Focus::ArticleDetail => {
-                    app.update_visual_selection_articles();
-                }
-                Focus::Subscriptions => {
-                    app.update_visual_selection_feeds();
+            // Use smooth scrolling for ArticleDetail, original behavior for others
+            if app.focus == Focus::ArticleDetail {
+                app.scroll_detail_full_page_down();
+            } else {
+                app.scroll_full_page_down();
+                // Update visual selection if in visual mode
+                match app.focus {
+                    Focus::ArticleList => {
+                        app.update_visual_selection_articles();
+                    }
+                    Focus::Subscriptions => {
+                        app.update_visual_selection_feeds();
+                    }
+                    _ => {}
                 }
             }
         }
         Action::ScrollPageUp => {
-            // Full page scroll using viewport height
-            app.scroll_full_page_up();
-            // Update visual selection if in visual mode
-            match app.focus {
-                Focus::ArticleList | Focus::ArticleDetail => {
-                    app.update_visual_selection_articles();
-                }
-                Focus::Subscriptions => {
-                    app.update_visual_selection_feeds();
+            // Use smooth scrolling for ArticleDetail, original behavior for others
+            if app.focus == Focus::ArticleDetail {
+                app.scroll_detail_full_page_up();
+            } else {
+                app.scroll_full_page_up();
+                // Update visual selection if in visual mode
+                match app.focus {
+                    Focus::ArticleList => {
+                        app.update_visual_selection_articles();
+                    }
+                    Focus::Subscriptions => {
+                        app.update_visual_selection_feeds();
+                    }
+                    _ => {}
                 }
             }
         }
         Action::JumpToTop => {
-            let prev_article = app.selected_article;
-            // Record history before jumping in ArticleDetail
-            if app.focus == Focus::ArticleDetail && app.selected_article > 0 {
-                app.push_history();
-            }
-            app.jump_to_top();
             app.clear_pending_key();
-            // Update visual selection if in visual mode
-            match app.focus {
-                Focus::ArticleList | Focus::ArticleDetail => {
-                    app.update_visual_selection_articles();
-                }
-                Focus::Subscriptions => {
-                    app.update_visual_selection_feeds();
-                }
-            }
-            // Handle article change in ArticleDetail (with auto mark-read)
-            if app.focus == Focus::ArticleDetail && prev_article != app.selected_article {
-                app.detail_scroll = 0;
-                app.clear_rich_state();
-                if let Some(article) = app.current_article() {
-                    if !article.is_read {
-                        let article_id = article.id;
-                        mark_article_read(app, client, db, article_id).await?;
-                        if let Some(article) = app.current_article_mut() {
-                            article.is_read = true;
-                        }
-                        if let Some(feed) = app.current_feed_mut() {
-                            feed.unread_count = feed.unread_count.saturating_sub(1);
-                        }
+            if app.focus == Focus::ArticleDetail {
+                // Jump to top of article content (instant)
+                app.scroll_detail_to_top();
+            } else {
+                app.jump_to_top();
+                // Update visual selection if in visual mode
+                match app.focus {
+                    Focus::ArticleList => {
+                        app.update_visual_selection_articles();
                     }
+                    Focus::Subscriptions => {
+                        app.update_visual_selection_feeds();
+                    }
+                    _ => {}
                 }
-                init_rich_article_state(app, data_dir);
             }
         }
         Action::JumpToBottom => {
-            let prev_article = app.selected_article;
-            // Record history before jumping in ArticleDetail
-            if app.focus == Focus::ArticleDetail && app.selected_article < app.articles.len().saturating_sub(1) {
-                app.push_history();
-            }
-            app.jump_to_bottom();
-            // Update visual selection if in visual mode
-            match app.focus {
-                Focus::ArticleList | Focus::ArticleDetail => {
-                    app.update_visual_selection_articles();
-                }
-                Focus::Subscriptions => {
-                    app.update_visual_selection_feeds();
-                }
-            }
-            // Handle article change in ArticleDetail (with auto mark-read)
-            if app.focus == Focus::ArticleDetail && prev_article != app.selected_article {
-                app.detail_scroll = 0;
-                app.clear_rich_state();
-                if let Some(article) = app.current_article() {
-                    if !article.is_read {
-                        let article_id = article.id;
-                        mark_article_read(app, client, db, article_id).await?;
-                        if let Some(article) = app.current_article_mut() {
-                            article.is_read = true;
-                        }
-                        if let Some(feed) = app.current_feed_mut() {
-                            feed.unread_count = feed.unread_count.saturating_sub(1);
-                        }
+            if app.focus == Focus::ArticleDetail {
+                // Jump to bottom of article content (instant)
+                app.scroll_detail_to_bottom();
+            } else {
+                app.jump_to_bottom();
+                // Update visual selection if in visual mode
+                match app.focus {
+                    Focus::ArticleList => {
+                        app.update_visual_selection_articles();
                     }
+                    Focus::Subscriptions => {
+                        app.update_visual_selection_feeds();
+                    }
+                    _ => {}
                 }
-                init_rich_article_state(app, data_dir);
             }
         }
         Action::PendingG => {
@@ -1421,7 +1418,7 @@ async fn handle_action(
                     // Move to next item (if not at last item)
                     if app.selected_article < app.articles.len().saturating_sub(1) {
                         app.selected_article += 1;
-                        app.detail_scroll = 0;
+                        app.reset_detail_scroll();
                         app.clear_rich_state();
                         init_rich_article_state(app, data_dir);
                     }

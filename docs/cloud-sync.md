@@ -84,10 +84,17 @@ On startup, the application checks for stale lock files (`.db-wal`, `.db-shm`) t
 ### PRAGMA Configuration
 
 The following SQLite settings optimize for cloud sync scenarios:
-- `busy_timeout = 5000` - Wait up to 5 seconds for locks
+- `busy_timeout = 10000` - Wait up to 10 seconds for locks (increased for high-concurrency)
 - `journal_mode = WAL` - Enable WAL mode
 - `synchronous = NORMAL` - Balance between safety and performance
-- `wal_autocheckpoint = 1000` - Periodic WAL checkpointing
+- `wal_autocheckpoint = 2000` - Periodic WAL checkpointing (~8MB)
+
+### Connection Pool & Concurrency
+
+To handle high-concurrency scenarios (daemon + TUI + cloud sync):
+- **Connection pool**: 15 connections (up from 5) to handle parallel operations
+- **IPC concurrency limit**: Maximum 10 concurrent requests processed simultaneously to prevent pool exhaustion
+- **Batch operations**: Tags are inserted in batches to reduce database round trips
 
 ## Notes
 

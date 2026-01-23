@@ -84,10 +84,17 @@ Kenseader 使用多项 SQLite 优化来实现可靠的多设备云同步：
 ### PRAGMA 配置
 
 以下 SQLite 设置针对云同步场景进行了优化：
-- `busy_timeout = 5000` - 等待锁定最长 5 秒
+- `busy_timeout = 10000` - 等待锁定最长 10 秒（高并发场景下增加等待时间）
 - `journal_mode = WAL` - 启用 WAL 模式
 - `synchronous = NORMAL` - 安全性和性能的平衡
-- `wal_autocheckpoint = 1000` - 定期 WAL 检查点
+- `wal_autocheckpoint = 2000` - 定期 WAL 检查点（约 8MB）
+
+### 连接池与并发控制
+
+为处理高并发场景（守护进程 + TUI + 云同步）：
+- **连接池**：15 个连接（原为 5 个）以处理并行操作
+- **IPC 并发限制**：最多同时处理 10 个并发请求，防止连接池耗尽
+- **批量操作**：标签采用批量插入以减少数据库往返次数
 
 ## 注意事项
 

@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use tokio::sync::watch;
 use tracing::{info, warn};
 
@@ -121,20 +121,15 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 }
 
 /// Migrate data from old data_dir to new data_dir
-fn migrate_data_dir(old_dir: &Path, new_dir: &Path) -> Result<()> {
+/// Returns Ok(true) if migration was performed, Ok(false) if skipped due to existing data
+fn migrate_data_dir(old_dir: &Path, new_dir: &Path) -> Result<bool> {
     // Files/directories to migrate
     let items_to_migrate = ["kenseader.db", "image_cache"];
 
-    // Check if new path already has data (conflict)
+    // Check if new path already has data - skip migration if so
     let db_in_new = new_dir.join("kenseader.db");
     if db_in_new.exists() {
-        return Err(anyhow!(
-            "Data conflict: {} already exists.\n\
-             Please manually resolve the conflict:\n\
-             - Delete or rename the existing file, or\n\
-             - Use a different data_dir path",
-            db_in_new.display()
-        ));
+        return Ok(false);
     }
 
     // Create new directory if needed
@@ -157,7 +152,7 @@ fn migrate_data_dir(old_dir: &Path, new_dir: &Path) -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(true)
 }
 
 /// Check and perform data migration if needed.
@@ -179,8 +174,15 @@ pub fn maybe_migrate_data(config: &AppConfig) -> Result<()> {
             let old_db = last_data_dir.join("kenseader.db");
             if old_db.exists() {
                 println!("Migrating data from old directory...");
-                migrate_data_dir(&last_data_dir, &current_data_dir)?;
-                println!("Migration completed successfully.");
+                if migrate_data_dir(&last_data_dir, &current_data_dir)? {
+                    println!("Migration completed successfully.");
+                } else {
+                    println!("Using existing data at new location.");
+                    println!(
+                        "Note: Old data at {} was not migrated.",
+                        last_data_dir.display()
+                    );
+                }
             }
         }
     } else {
@@ -192,8 +194,15 @@ pub fn maybe_migrate_data(config: &AppConfig) -> Result<()> {
             println!("  Default data location: {}", default_data_dir.display());
             println!("  Configured location: {}", current_data_dir.display());
             println!("Migrating data from default directory...");
-            migrate_data_dir(&default_data_dir, &current_data_dir)?;
-            println!("Migration completed successfully.");
+            if migrate_data_dir(&default_data_dir, &current_data_dir)? {
+                println!("Migration completed successfully.");
+            } else {
+                println!("Using existing data at configured location.");
+                println!(
+                    "Note: Data at default location {} was not migrated.",
+                    default_data_dir.display()
+                );
+            }
         }
     }
 

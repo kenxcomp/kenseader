@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::watch;
+use tokio::sync::{watch, Semaphore};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -20,12 +20,17 @@ use crate::scheduler::tasks;
 use crate::storage::{ArticleRepository, Database, FeedRepository};
 use crate::Result;
 
+/// Maximum number of concurrent IPC requests to prevent connection pool exhaustion
+const MAX_CONCURRENT_REQUESTS: usize = 10;
+
 /// IPC Server that handles client connections
 pub struct DaemonServer {
     db: Arc<Database>,
     config: Arc<AppConfig>,
     socket_path: PathBuf,
     start_time: Instant,
+    /// Semaphore to limit concurrent request processing
+    request_semaphore: Arc<Semaphore>,
 }
 
 impl DaemonServer {
@@ -36,6 +41,7 @@ impl DaemonServer {
             config,
             socket_path,
             start_time: Instant::now(),
+            request_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
         }
     }
 
@@ -62,8 +68,9 @@ impl DaemonServer {
                             let db = self.db.clone();
                             let config = self.config.clone();
                             let start_time = self.start_time;
+                            let semaphore = self.request_semaphore.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_connection(stream, db, config, start_time).await {
+                                if let Err(e) = handle_connection(stream, db, config, start_time, semaphore).await {
                                     warn!("Error handling connection: {}", e);
                                 }
                             });
@@ -93,6 +100,7 @@ async fn handle_connection(
     db: Arc<Database>,
     config: Arc<AppConfig>,
     start_time: Instant,
+    semaphore: Arc<Semaphore>,
 ) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -104,6 +112,12 @@ async fn handle_connection(
         if bytes_read == 0 {
             break; // Connection closed
         }
+
+        // Acquire semaphore permit to limit concurrent request processing
+        // This prevents connection pool exhaustion under high load
+        let _permit = semaphore.acquire().await.map_err(|e| {
+            crate::Error::Other(format!("Failed to acquire semaphore: {}", e))
+        })?;
 
         let response = match serde_json::from_str::<Request>(&line) {
             Ok(request) => {

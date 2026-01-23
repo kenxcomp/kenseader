@@ -122,7 +122,7 @@ impl Default for AiConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiConfig {
-    /// Tick rate in milliseconds
+    /// Tick rate in milliseconds (used when not animating)
     #[serde(default = "default_tick_rate")]
     pub tick_rate_ms: u64,
     /// Show article author
@@ -137,6 +137,9 @@ pub struct UiConfig {
     /// Theme configuration
     #[serde(default)]
     pub theme: ThemeConfig,
+    /// Smooth scrolling configuration
+    #[serde(default)]
+    pub scroll: ScrollConfig,
 }
 
 impl Default for UiConfig {
@@ -147,8 +150,74 @@ impl Default for UiConfig {
             show_timestamps: default_true(),
             image_preview: default_true(),
             theme: ThemeConfig::default(),
+            scroll: ScrollConfig::default(),
         }
     }
+}
+
+/// Easing function types for scroll animations
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EasingType {
+    /// No easing - instant jump (equivalent to disabled smooth scroll)
+    None,
+    /// Linear interpolation - constant speed
+    Linear,
+    /// Cubic ease-out - starts fast, slows down at end (default)
+    #[default]
+    Cubic,
+    /// Quintic ease-out - more pronounced slowdown at end
+    Quintic,
+    /// Exponential ease-out - smooth deceleration
+    EaseOut,
+}
+
+/// Configuration for smooth scrolling behavior
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScrollConfig {
+    /// Enable smooth scrolling animation
+    #[serde(default = "default_smooth_enabled")]
+    pub smooth_enabled: bool,
+    /// Animation duration in milliseconds
+    #[serde(default = "default_animation_duration_ms")]
+    pub animation_duration_ms: u64,
+    /// Easing function type
+    #[serde(default)]
+    pub easing: EasingType,
+    /// Number of lines to scroll when smooth scrolling is disabled
+    #[serde(default = "default_scroll_lines")]
+    pub scroll_lines: u16,
+    /// Target FPS during animation (determines tick rate)
+    #[serde(default = "default_animation_fps")]
+    pub animation_fps: u32,
+}
+
+impl Default for ScrollConfig {
+    fn default() -> Self {
+        Self {
+            smooth_enabled: default_smooth_enabled(),
+            animation_duration_ms: default_animation_duration_ms(),
+            easing: EasingType::default(),
+            scroll_lines: default_scroll_lines(),
+            animation_fps: default_animation_fps(),
+        }
+    }
+}
+
+fn default_smooth_enabled() -> bool {
+    true
+}
+
+fn default_animation_duration_ms() -> u64 {
+    150
+}
+
+fn default_scroll_lines() -> u16 {
+    1
+}
+
+fn default_animation_fps() -> u32 {
+    60
 }
 
 /// Theme configuration

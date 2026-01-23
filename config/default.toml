@@ -121,6 +121,19 @@ theme = "gruvbox-dark"
 # warning = "#fe8019"
 # info = "#83a598"
 
+# Smooth scrolling configuration (nvim-like)
+[ui.scroll]
+# Enable smooth scrolling animation
+smooth_enabled = true
+# Animation duration in milliseconds
+animation_duration_ms = 150
+# Easing function: none, linear, cubic, quintic, easeout
+easing = "cubic"
+# Lines per scroll when smooth scrolling is disabled
+scroll_lines = 1
+# Animation frame rate (fps)
+animation_fps = 60
+
 [sync]
 # Scheduler check interval in seconds (0 = disabled)
 # This controls how often the scheduler runs to check for feeds that need refreshing
