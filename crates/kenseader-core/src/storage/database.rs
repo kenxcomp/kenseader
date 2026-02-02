@@ -1,5 +1,9 @@
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+};
+use sqlx::{Pool, Sqlite};
 use std::path::Path;
+use std::str::FromStr;
 use std::time::Duration;
 
 use crate::config::AppConfig;
@@ -26,39 +30,24 @@ impl Database {
             Self::cleanup_stale_locks(&db_path)?;
         }
 
-        let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+        let db_url = format!("sqlite:{}", db_path.display());
 
         tracing::info!("Connecting to database: {}", db_path.display());
+
+        // Use SqliteConnectOptions to set PRAGMAs per-connection.
+        // This ensures every connection in the pool has the correct settings,
+        // not just the first one — critical for cloud sync (iCloud, Dropbox) scenarios.
+        let options = SqliteConnectOptions::from_str(&db_url)?
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(10))
+            .pragma("wal_autocheckpoint", "2000");
 
         let pool = SqlitePoolOptions::new()
             .max_connections(15)
             .acquire_timeout(Duration::from_secs(10))
-            .connect(&db_url)
-            .await?;
-
-        // Configure SQLite PRAGMA for better concurrency with cloud sync scenarios
-        // busy_timeout: Wait up to 10 seconds when database is locked (increased for high-concurrency)
-        sqlx::query("PRAGMA busy_timeout = 10000")
-            .execute(&pool)
-            .await?;
-
-        // Enable WAL mode for better concurrent read/write performance
-        // WAL mode allows readers and writers to work simultaneously
-        sqlx::query("PRAGMA journal_mode = WAL")
-            .execute(&pool)
-            .await?;
-
-        // NORMAL synchronous mode - good balance between safety and performance
-        // Provides durability guarantees while being faster than FULL
-        sqlx::query("PRAGMA synchronous = NORMAL")
-            .execute(&pool)
-            .await?;
-
-        // Set WAL auto-checkpoint to 2000 pages (~8MB)
-        // This controls when WAL file is checkpointed back to main database
-        // Higher value reduces checkpoint frequency, improving write performance under load
-        sqlx::query("PRAGMA wal_autocheckpoint = 2000")
-            .execute(&pool)
+            .connect_with(options)
             .await?;
 
         let db = Self { pool };

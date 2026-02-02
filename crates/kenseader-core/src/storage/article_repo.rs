@@ -272,17 +272,25 @@ impl<'a> ArticleRepository<'a> {
 
     /// Get all unread articles that have been summarized
     pub async fn list_unread_summarized(&self) -> Result<Vec<Article>> {
-        let rows: Vec<ArticleRow> = sqlx::query_as(
-            r#"
-            SELECT id, feed_id, guid, url, title, author, content, content_text,
-                   summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at, image_url, relevance_score
-            FROM articles
-            WHERE is_read = 0 AND summary IS NOT NULL
-            ORDER BY published_at DESC, created_at DESC
-            "#,
-        )
-        .fetch_all(self.db.pool())
+        let pool = self.db.pool().clone();
+
+        let rows: Vec<ArticleRow> = query_with_retry(|| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_as(
+                    r#"
+                    SELECT id, feed_id, guid, url, title, author, content, content_text,
+                           summary, summary_generated_at, published_at, fetched_at,
+                           is_read, read_at, is_saved, created_at, image_url, relevance_score
+                    FROM articles
+                    WHERE is_read = 0 AND summary IS NOT NULL
+                    ORDER BY published_at DESC, created_at DESC
+                    "#,
+                )
+                .fetch_all(&pool)
+                .await
+            }
+        })
         .await?;
 
         Ok(rows.into_iter().map(Article::from).collect())
@@ -290,19 +298,27 @@ impl<'a> ArticleRepository<'a> {
 
     /// Get all unread articles
     pub async fn list_unread(&self, limit: u32) -> Result<Vec<Article>> {
-        let rows: Vec<ArticleRow> = sqlx::query_as(
-            r#"
-            SELECT id, feed_id, guid, url, title, author, content, content_text,
-                   summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at, image_url, relevance_score
-            FROM articles
-            WHERE is_read = 0
-            ORDER BY published_at DESC, created_at DESC
-            LIMIT ?
-            "#,
-        )
-        .bind(limit)
-        .fetch_all(self.db.pool())
+        let pool = self.db.pool().clone();
+
+        let rows: Vec<ArticleRow> = query_with_retry(|| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_as(
+                    r#"
+                    SELECT id, feed_id, guid, url, title, author, content, content_text,
+                           summary, summary_generated_at, published_at, fetched_at,
+                           is_read, read_at, is_saved, created_at, image_url, relevance_score
+                    FROM articles
+                    WHERE is_read = 0
+                    ORDER BY published_at DESC, created_at DESC
+                    LIMIT ?
+                    "#,
+                )
+                .bind(limit)
+                .fetch_all(&pool)
+                .await
+            }
+        })
         .await?;
 
         Ok(rows.into_iter().map(Article::from).collect())
@@ -311,23 +327,32 @@ impl<'a> ArticleRepository<'a> {
     /// Get articles that need summarization
     /// Only returns unread articles with content_text length >= min_length and no summary
     pub async fn list_unsummarized(&self, limit: u32, min_length: usize) -> Result<Vec<Article>> {
-        let rows: Vec<ArticleRow> = sqlx::query_as(
-            r#"
-            SELECT id, feed_id, guid, url, title, author, content, content_text,
-                   summary, summary_generated_at, published_at, fetched_at,
-                   is_read, read_at, is_saved, created_at, image_url, relevance_score
-            FROM articles
-            WHERE summary IS NULL
-              AND content_text IS NOT NULL
-              AND LENGTH(content_text) >= ?
-              AND is_read = 0
-            ORDER BY created_at DESC
-            LIMIT ?
-            "#,
-        )
-        .bind(min_length as i64)
-        .bind(limit)
-        .fetch_all(self.db.pool())
+        let pool = self.db.pool().clone();
+        let min_len = min_length as i64;
+
+        let rows: Vec<ArticleRow> = query_with_retry(|| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_as(
+                    r#"
+                    SELECT id, feed_id, guid, url, title, author, content, content_text,
+                           summary, summary_generated_at, published_at, fetched_at,
+                           is_read, read_at, is_saved, created_at, image_url, relevance_score
+                    FROM articles
+                    WHERE summary IS NULL
+                      AND content_text IS NOT NULL
+                      AND LENGTH(content_text) >= ?
+                      AND is_read = 0
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    "#,
+                )
+                .bind(min_len)
+                .bind(limit)
+                .fetch_all(&pool)
+                .await
+            }
+        })
         .await?;
 
         Ok(rows.into_iter().map(Article::from).collect())
@@ -340,19 +365,29 @@ impl<'a> ArticleRepository<'a> {
             return Ok(Vec::new());
         }
 
-        // Build placeholders for IN clause
-        let placeholders: Vec<String> = ids.iter().map(|_| "?".to_string()).collect();
-        let query = format!(
-            "SELECT id FROM articles WHERE id IN ({}) AND is_read = 0",
-            placeholders.join(", ")
-        );
+        let pool = self.db.pool().clone();
+        let id_strings: Vec<String> = ids.iter().map(|id| id.to_string()).collect();
 
-        let mut query_builder = sqlx::query_scalar::<_, String>(&query);
-        for id in ids {
-            query_builder = query_builder.bind(id.to_string());
-        }
+        let rows: Vec<String> = query_with_retry(|| {
+            let pool = pool.clone();
+            let id_strings = id_strings.clone();
+            async move {
+                let placeholders: Vec<String> =
+                    id_strings.iter().map(|_| "?".to_string()).collect();
+                let query = format!(
+                    "SELECT id FROM articles WHERE id IN ({}) AND is_read = 0",
+                    placeholders.join(", ")
+                );
 
-        let rows: Vec<String> = query_builder.fetch_all(self.db.pool()).await?;
+                let mut query_builder = sqlx::query_scalar::<_, String>(&query);
+                for id_str in &id_strings {
+                    query_builder = query_builder.bind(id_str);
+                }
+
+                query_builder.fetch_all(&pool).await
+            }
+        })
+        .await?;
 
         Ok(rows
             .into_iter()
@@ -441,10 +476,17 @@ impl<'a> ArticleRepository<'a> {
         .await?;
 
         // Return the new saved status
-        let row: (i32,) = sqlx::query_as("SELECT is_saved FROM articles WHERE id = ?")
-            .bind(id.to_string())
-            .fetch_one(self.db.pool())
-            .await?;
+        let row: (i32,) = query_with_retry(|| {
+            let pool = pool.clone();
+            let id_str = id_str.clone();
+            async move {
+                sqlx::query_as("SELECT is_saved FROM articles WHERE id = ?")
+                    .bind(&id_str)
+                    .fetch_one(&pool)
+                    .await
+            }
+        })
+        .await?;
 
         Ok(row.0 != 0)
     }
@@ -555,11 +597,19 @@ impl<'a> ArticleRepository<'a> {
 
     /// Get tags for an article
     pub async fn get_tags(&self, article_id: Uuid) -> Result<Vec<String>> {
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT tag FROM article_tags WHERE article_id = ?",
-        )
-        .bind(article_id.to_string())
-        .fetch_all(self.db.pool())
+        let pool = self.db.pool().clone();
+        let article_id_str = article_id.to_string();
+
+        let rows: Vec<(String,)> = query_with_retry(|| {
+            let pool = pool.clone();
+            let article_id_str = article_id_str.clone();
+            async move {
+                sqlx::query_as("SELECT tag FROM article_tags WHERE article_id = ?")
+                    .bind(&article_id_str)
+                    .fetch_all(&pool)
+                    .await
+            }
+        })
         .await?;
 
         Ok(rows.into_iter().map(|(tag,)| tag).collect())
@@ -593,41 +643,51 @@ impl<'a> ArticleRepository<'a> {
     /// Search articles by title or content
     pub async fn search(&self, query: &str, feed_id: Option<Uuid>) -> Result<Vec<Article>> {
         let search_pattern = format!("%{}%", query);
+        let pool = self.db.pool().clone();
+        let feed_id_str = feed_id.map(|fid| fid.to_string());
 
-        let rows: Vec<ArticleRow> = if let Some(fid) = feed_id {
-            sqlx::query_as(
-                r#"
-                SELECT id, feed_id, guid, url, title, author, content, content_text,
-                       summary, summary_generated_at, published_at, fetched_at,
-                       is_read, read_at, is_saved, created_at, image_url, relevance_score
-                FROM articles
-                WHERE feed_id = ? AND (title LIKE ? OR content_text LIKE ?)
-                ORDER BY published_at DESC
-                LIMIT 100
-                "#,
-            )
-            .bind(fid.to_string())
-            .bind(&search_pattern)
-            .bind(&search_pattern)
-            .fetch_all(self.db.pool())
-            .await?
-        } else {
-            sqlx::query_as(
-                r#"
-                SELECT id, feed_id, guid, url, title, author, content, content_text,
-                       summary, summary_generated_at, published_at, fetched_at,
-                       is_read, read_at, is_saved, created_at, image_url, relevance_score
-                FROM articles
-                WHERE title LIKE ? OR content_text LIKE ?
-                ORDER BY published_at DESC
-                LIMIT 100
-                "#,
-            )
-            .bind(&search_pattern)
-            .bind(&search_pattern)
-            .fetch_all(self.db.pool())
-            .await?
-        };
+        let rows: Vec<ArticleRow> = query_with_retry(|| {
+            let pool = pool.clone();
+            let search_pattern = search_pattern.clone();
+            let feed_id_str = feed_id_str.clone();
+            async move {
+                if let Some(fid_str) = feed_id_str {
+                    sqlx::query_as(
+                        r#"
+                        SELECT id, feed_id, guid, url, title, author, content, content_text,
+                               summary, summary_generated_at, published_at, fetched_at,
+                               is_read, read_at, is_saved, created_at, image_url, relevance_score
+                        FROM articles
+                        WHERE feed_id = ? AND (title LIKE ? OR content_text LIKE ?)
+                        ORDER BY published_at DESC
+                        LIMIT 100
+                        "#,
+                    )
+                    .bind(&fid_str)
+                    .bind(&search_pattern)
+                    .bind(&search_pattern)
+                    .fetch_all(&pool)
+                    .await
+                } else {
+                    sqlx::query_as(
+                        r#"
+                        SELECT id, feed_id, guid, url, title, author, content, content_text,
+                               summary, summary_generated_at, published_at, fetched_at,
+                               is_read, read_at, is_saved, created_at, image_url, relevance_score
+                        FROM articles
+                        WHERE title LIKE ? OR content_text LIKE ?
+                        ORDER BY published_at DESC
+                        LIMIT 100
+                        "#,
+                    )
+                    .bind(&search_pattern)
+                    .bind(&search_pattern)
+                    .fetch_all(&pool)
+                    .await
+                }
+            }
+        })
+        .await?;
 
         Ok(rows.into_iter().map(Article::from).collect())
     }

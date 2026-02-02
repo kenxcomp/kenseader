@@ -72,9 +72,10 @@ The database uses WAL journal mode instead of the default DELETE mode. This prov
 
 ### Retry Mechanism
 
-Write operations (marking articles read, toggling bookmarks, etc.) include automatic retry logic:
-- On database busy/locked errors, operations retry up to 5 times
+All database operations (reads and writes) include automatic retry logic:
+- On transient errors (busy, locked, I/O errors from cloud sync), operations retry up to 5 times
 - Uses exponential backoff (200ms, 400ms, 800ms, 1600ms, 3200ms)
+- Covers `SQLITE_BUSY`, `SQLITE_LOCKED`, `SQLITE_IOERR_SHORT_READ`, and other transient I/O errors
 - Most concurrent access conflicts resolve within 1-2 retries
 
 ### Lock File Handling
@@ -83,7 +84,7 @@ On startup, the application checks for stale lock files (`.db-wal`, `.db-shm`) t
 
 ### PRAGMA Configuration
 
-The following SQLite settings optimize for cloud sync scenarios:
+The following SQLite settings optimize for cloud sync scenarios, applied per-connection to ensure every connection in the pool is properly configured:
 - `busy_timeout = 10000` - Wait up to 10 seconds for locks (increased for high-concurrency)
 - `journal_mode = WAL` - Enable WAL mode
 - `synchronous = NORMAL` - Balance between safety and performance
